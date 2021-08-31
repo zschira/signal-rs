@@ -1,0 +1,16 @@
+label.label1 {
+    color: black;
+    font-weight: bold;
+    font-size: large;
+}
+
+button {
+    /* If we don't put it, the yellow background won't be visible */
+    background-image: none;
+}
+
+button.button1:hover {
+    transition: 500ms;
+    color: red;
+    background-color: yellow;
+}
