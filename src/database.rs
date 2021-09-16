@@ -2,7 +2,6 @@ use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 use dotenv::dotenv;
 use std::env;
-use std::rc::Rc;
 use uuid::Uuid;
 
 use signald::types::{JsonAttachmentV0, JsonMentionV1};
@@ -20,9 +19,9 @@ pub fn establish_connection() -> SqliteConnection {
         .expect(&format!("Error connecting to {}", database_url))
 }
 
-pub fn store_message(db: &SqliteConnection, msg: NewMessage) {
+pub fn store_message(db: &SqliteConnection, msg: &NewMessage) {
     diesel::insert_into(messages::table)
-        .values(&msg)
+        .values(msg)
         .execute(db)
         .expect("Failed to insert message into db");
 }
@@ -104,13 +103,18 @@ pub fn query_conversation(db: &SqliteConnection, conversation: &ConversationType
     }
 }
 
-pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: String, from_me_q: bool, groupid_q: Option<String>) -> Message {
+pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: Option<String>, from_me_q: bool, groupid_q: Option<String>) -> Message {
     use crate::schema::messages::dsl::*;
 
-    let mut query = messages.filter(number.eq(number_q.as_str()))
+    let mut query = messages
         .filter(timestamp.eq(timestamp_q))
         .filter(from_me.eq(from_me_q))
         .into_boxed();
+
+    match number_q {
+        Some(number_q) => { query = query.filter(number.eq(number_q)); },
+        None => { query = query.filter(number.is_null()); }
+    }
 
     match groupid_q {
         Some(gid) => { query = query.filter(groupid.eq(gid)); },

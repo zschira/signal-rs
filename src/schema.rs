@@ -10,7 +10,7 @@ table! {
 table! {
     messages (timestamp, number, from_me, groupid) {
         timestamp -> BigInt,
-        number -> Text,
+        number -> Nullable<Text>,
         from_me -> Bool,
         attachments -> Nullable<Text>,
         body -> Text,

@@ -66,7 +66,7 @@ fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1
     // Should only be called if it's determined to contain data_message
     let msg = envelope.data_message.unwrap();
     let timestamp = msg.timestamp.unwrap();
-    let number = envelope.source.unwrap().number.unwrap();
+    let number = envelope.source.unwrap().number;
     let attachments = database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref());
 
     if !msg.body.is_some() {
@@ -98,7 +98,7 @@ fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1
         mentions_start
     };
 
-    database::store_message(&db.lock().unwrap(), msg);
+    database::store_message(&db.lock().unwrap(), &msg);
 }
 
 fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1) {
@@ -108,7 +108,7 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
         let (mentions, mentions_start) = database::convert_mentions(&msg_packet.mentions);
         let msg = NewMessage {
             timestamp: sent.timestamp.unwrap(),
-            number: destination.number.unwrap(),
+            number: destination.number,
             from_me: true,
             body: msg_packet.body.as_ref().unwrap().as_str(),
             attachments: database::store_attachments(&db.lock().unwrap(), msg_packet.attachments.as_ref()),
@@ -125,7 +125,7 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
             mentions_start
         };
 
-        database::store_message(&db.lock().unwrap(), msg);
+        database::store_message(&db.lock().unwrap(), &msg);
     }
 }
 

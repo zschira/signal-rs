@@ -3,7 +3,7 @@ use super::schema::{attachments, messages};
 #[derive(Queryable, Default)]
 pub struct Message {
     pub timestamp: i64,
-    pub number: String,
+    pub number: Option<String>,
     pub from_me: bool,
     pub attachments: Option<String>,
     pub body: String,
@@ -18,7 +18,7 @@ pub struct Message {
 #[table_name = "messages"]
 pub struct NewMessage<'a> {
     pub timestamp: i64,
-    pub number: String,
+    pub number: Option<String>,
     pub from_me: bool,
     pub attachments: Option<String>,
     pub body: &'a str,

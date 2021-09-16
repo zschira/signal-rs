@@ -5,7 +5,7 @@ use gtk::{Align, Button, Box as Box_, Entry, HeaderBar, Justification,
 use gtk::glib::{self, clone, MainContext};
 use gtk::gio;
 use std::rc::Rc;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use chrono;
 use diesel::sqlite::SqliteConnection;
@@ -24,24 +24,24 @@ pub enum ConversationType {
 
 pub struct Conversation {
     pub conversation_type: ConversationType,
-    model: Option<gio::ListModel>,
-    typing: bool
+    model: RefCell<Option<gio::ListStore>>,
+    typing: RefCell<bool>
 }
 
 impl Conversation {
     pub fn new_individual(profile: ProfileV1) -> Self {
         Conversation {
             conversation_type: ConversationType::Individual(profile),
-            model: None,
-            typing: false
+            model: RefCell::new(None),
+            typing: RefCell::new(false)
         }
     }
 
     pub fn new_group(group: JsonGroupV2InfoV1) -> Self {
         Conversation {
             conversation_type: ConversationType::Group(group),
-            model: None,
-            typing: false
+            model: RefCell::new(None),
+            typing: RefCell::new(false)
         }
     }
 
@@ -127,7 +127,7 @@ impl App {
                 msg_entry.delete_text(0, -1);
 
                 let msg = construct_message(&app.account.borrow(), conversation.clone(), msg_body);
-                store_message(app.db.clone(), &msg);
+                store_message(app.db.clone(), &msg, conversation.clone());
 
                 main_context.spawn_local(clone!(@weak msg_entry, @strong app =>
                     async move {
@@ -191,7 +191,7 @@ impl App {
             let number = msg
                 .property("number")
                 .expect("The property needs to exist and be readable.")
-                .get::<String>()
+                .get::<Option<String>>()
                 .expect("The property needs to be of type String");
 
             let from_me = msg
@@ -278,17 +278,19 @@ impl App {
             }
         });
 
+        conversation.model.replace(Some(model));
+
         window
     }
 }
 
-fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1) {
+fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1, conversation: Rc<Conversation>) {
     let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
     let msg = NewMessage {
         timestamp: msg.timestamp.unwrap(),
         number: msg.recipient_address.as_ref().map(|address| {
             address.number.as_ref().unwrap().clone()
-        }).unwrap(),
+        }),
         from_me: true,
         attachments: database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref()),
         body: msg.message_body.as_ref().unwrap().as_str(),
@@ -301,7 +303,13 @@ fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1) {
         mentions_start
     };
 
-    database::store_message(&db.lock().unwrap(), msg);
+    database::store_message(&db.lock().unwrap(), &msg);
+
+    conversation.model
+        .borrow_mut()
+        .as_ref()
+        .unwrap()
+        .append(&MessageObject::new_sent(&msg));
 }
 
 fn construct_message(username: &String, conversation: Rc<Conversation>, body: String) -> SendRequestV1 {

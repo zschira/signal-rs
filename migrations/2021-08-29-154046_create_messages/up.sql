@@ -1,6 +1,6 @@
 CREATE TABLE messages (
   timestamp BIGINT NOT NULL,
-  number TEXT NOT NULL,
+  number TEXT,
   from_me TINYINT NOT NULL,
   attachments TEXT,
   body TEXT NOT NULL,

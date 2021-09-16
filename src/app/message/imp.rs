@@ -8,7 +8,7 @@ use std::cell::RefCell;
 #[derive(Default)]
 pub struct MessageObject {
     timestamp: RefCell<i64>,
-    number: RefCell<String>,
+    number: RefCell<Option<String>>,
     from_me: RefCell<bool>,
     groupid: RefCell<Option<String>>,
 }
