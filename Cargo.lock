@@ -1275,6 +1275,7 @@ dependencies = [
  "dotenv",
  "gtk4",
  "image",
+ "once_cell",
  "qrcode",
  "signald",
  "uuid",
@@ -1283,6 +1284,7 @@ dependencies = [
 [[package]]
 name = "signald"
 version = "0.1.0"
+source = "git+https://github.com/zschira/signald-rs?branch=main#7f235587c5f82c47da31137689bed9e340335a10"
 dependencies = [
  "async-std",
  "async-trait",

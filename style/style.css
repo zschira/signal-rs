@@ -1,5 +1,5 @@
 label.label1 {
-    color: black;
+    color: white;
     font-weight: bold;
     font-size: large;
 }
@@ -13,4 +13,22 @@ button.button1:hover {
     transition: 500ms;
     color: red;
     background-color: yellow;
+}
+
+label.messageText {
+    color: white;
+    font-size: medium;
+    margin: 5;
+}
+
+box.messageReceived {
+    background-color: darkslategrey;
+    margin: 15;
+    padding: 5;
+}
+
+box.messageSent {
+    background-color: purple;
+    margin: 15;
+    padding: 5;
 }

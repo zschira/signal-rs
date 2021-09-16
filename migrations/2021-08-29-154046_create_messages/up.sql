@@ -1,11 +1,13 @@
 CREATE TABLE messages (
   timestamp BIGINT NOT NULL,
   number TEXT NOT NULL,
+  from_me TINYINT NOT NULL,
   attachments TEXT,
   body TEXT NOT NULL,
   groupid TEXT,
   quote_timestamp BIGINT,
-  quote_uuid BLOB,
+  quote_author TEXT,
   mentions BLOB,
-  PRIMARY KEY (timestamp, number, groupid)
+  mentions_start BLOB,
+  PRIMARY KEY (timestamp, from_me, number, groupid)
 )

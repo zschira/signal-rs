@@ -11,13 +11,12 @@ use gtk::{
 use gtk::glib::{clone, MainContext};
 
 mod signald_bridge;
-mod chat;
+//mod chat;
 mod app;
 mod database;
 mod schema;
 mod models;
 
-use crate::chat::Chat;
 use crate::app::App;
 
 fn main() {
@@ -35,10 +34,7 @@ fn main() {
         );
 
         // We build the application UI.
-        let app = App::new(app);
-        MainContext::default().spawn_local(clone!(@strong app => async move {
-            Chat::new(app).await;
-        }));
+        App::new(app);
     });
     application.run();
 }

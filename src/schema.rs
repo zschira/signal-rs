@@ -8,15 +8,17 @@ table! {
 }
 
 table! {
-    messages (timestamp, number, groupid) {
+    messages (timestamp, number, from_me, groupid) {
         timestamp -> BigInt,
         number -> Text,
+        from_me -> Bool,
         attachments -> Nullable<Text>,
         body -> Text,
         groupid -> Nullable<Text>,
         quote_timestamp -> Nullable<BigInt>,
-        quote_uuid -> Nullable<Binary>,
+        quote_author -> Nullable<Text>,
         mentions -> Nullable<Binary>,
+        mentions_start -> Nullable<Binary>,
     }
 }
 

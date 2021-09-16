@@ -1,14 +1,11 @@
 use signald::Signald;
-use signald::types::{JsonAttachmentV0, IncomingMessageV1, SignaldTypes};
+use signald::types::{IncomingMessageV1, JsonSyncMessageV1, SignaldTypes};
 use async_std::channel::{Receiver, Sender};
 use uuid::Uuid;
 use diesel::sqlite::SqliteConnection;
-use diesel::prelude::*;
 
-use crate::database::establish_connection;
-use crate::models::{NewAttachment, NewMessage};
-
-use crate::schema::{attachments, messages};
+use crate::database::{self, establish_connection};
+use crate::models::NewMessage;
 
 pub struct SignaldInteraction {
     pub key: &'static str,
@@ -56,6 +53,7 @@ fn message_handler(db: &SqliteConnection, msg: IncomingMessageV1) {
     if msg.data_message.is_some() {
         handle_data_msg(db, msg);
     } else if msg.sync_message.is_some() {
+        handle_sync_message(db, msg.sync_message.unwrap());
     }
 }
 
@@ -70,12 +68,12 @@ fn handle_data_msg(db: &SqliteConnection, envelope: IncomingMessageV1) {
     let msg = envelope.data_message.unwrap();
     let timestamp = msg.timestamp.unwrap();
     let number = envelope.source.unwrap().number.unwrap();
-    let attachments = msg.attachments.map(|attachments| {
-        attachments.iter().fold(String::new(), |acc, attachment| {
-            handle_attachment(db, attachment);
-            format!("{}\n{}", acc, attachment.id.as_ref().unwrap())
-        })
-    });
+    let attachments = database::store_attachments(db, msg.attachments.as_ref());
+
+    if !msg.body.is_some() {
+        return;
+    }
+
     let body = msg.body.as_ref().unwrap();
     let groupid = msg.group_v_2.as_ref().map(|group| {
         group.id.as_ref().unwrap().as_str()
@@ -83,64 +81,29 @@ fn handle_data_msg(db: &SqliteConnection, envelope: IncomingMessageV1) {
     let quote_timestamp = msg.quote.as_ref().map(|quote| {
         quote.id.unwrap()
     });
-    let quote_uuid = msg.quote.map(|quote| {
-        Uuid::parse_str(
-            quote.author
-                .unwrap()
-                .uuid
-                .as_ref()
-                .unwrap()
-        ).unwrap()
+    let quote_author = msg.quote.as_ref().map(|quote| {
+        quote.author.as_ref().unwrap().number.as_ref().unwrap().as_str()
     });
-    let quote_uuid = quote_uuid.as_ref().map(|uuid| &uuid.as_bytes()[..]);
-    let mentions = msg.mentions.as_ref().map(|mentions| {
-        mentions.iter().fold(Vec::new(), |mut acc, mention| {
-            acc.extend_from_slice(
-                Uuid::parse_str(mention.uuid.as_ref().unwrap()).unwrap().as_bytes()
-            );
-            acc
-        })
-    });
+    let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
 
     let msg = NewMessage {
         timestamp,
         number,
+        from_me: false,
         attachments,
         body,
         groupid,
         quote_timestamp,
-        quote_uuid,
-        mentions
+        quote_author,
+        mentions,
+        mentions_start
     };
 
-    diesel::insert_into(messages::table)
-        .values(&msg)
-        .execute(db)
-        .expect("Failed to insert message into db");
+    database::store_message(db, msg);
+}
+
+fn handle_sync_message(_db: &SqliteConnection, _msg: JsonSyncMessageV1) {
 }
 
 fn handle_reaction(_db: &SqliteConnection, _envelope: IncomingMessageV1) {
-}
-
-fn handle_attachment(db: &SqliteConnection, attachment: &JsonAttachmentV0) {
-    let id = attachment.id.as_ref().unwrap().as_str();
-    let blurhash = attachment.blurhash.as_ref().map(|blurhash| {
-        blurhash.as_str()
-    });
-    let content_type = attachment.content_type.as_ref().unwrap().as_str();
-    let filename = attachment.stored_filename.as_ref().map(|filename| {
-        filename.as_str()
-    });
-
-    let attachment = NewAttachment {
-        id,
-        blurhash,
-        content_type,
-        filename
-    };
-
-    diesel::insert_into(attachments::table)
-        .values(&attachment)
-        .execute(db)
-        .expect("Failed to insert attachment into db");
 }
