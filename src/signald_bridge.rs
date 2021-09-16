@@ -3,8 +3,9 @@ use signald::types::{IncomingMessageV1, JsonSyncMessageV1, SignaldTypes};
 use async_std::channel::{Receiver, Sender};
 use uuid::Uuid;
 use diesel::sqlite::SqliteConnection;
+use std::sync::{Arc, Mutex};
 
-use crate::database::{self, establish_connection};
+use crate::database;
 use crate::models::NewMessage;
 
 pub struct SignaldInteraction {
@@ -13,13 +14,11 @@ pub struct SignaldInteraction {
     pub response_channel: Option<Sender<SignaldInteraction>>
 }
 
-pub async fn listen(receiver: Receiver<SignaldInteraction>) {
-    let db = establish_connection();
-
+pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<SignaldInteraction>) {
     let mut signald = Signald::connect(
         "run/signald.sock",
         move |msg| {
-            message_handler(&db, msg);
+            message_handler(db.clone(), msg);
         }
     ).await.expect("Failed to open socket to signald");
 
@@ -49,7 +48,7 @@ pub async fn listen(receiver: Receiver<SignaldInteraction>) {
     }
 }
 
-fn message_handler(db: &SqliteConnection, msg: IncomingMessageV1) {
+fn message_handler(db: Arc<Mutex<SqliteConnection>>, msg: IncomingMessageV1) {
     if msg.data_message.is_some() {
         handle_data_msg(db, msg);
     } else if msg.sync_message.is_some() {
@@ -57,7 +56,7 @@ fn message_handler(db: &SqliteConnection, msg: IncomingMessageV1) {
     }
 }
 
-fn handle_data_msg(db: &SqliteConnection, envelope: IncomingMessageV1) {
+fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1) {
     // Check that message isn't just a reaction
     if envelope.data_message.as_ref().unwrap().reaction.is_some() {
         handle_reaction(db, envelope);
@@ -68,7 +67,7 @@ fn handle_data_msg(db: &SqliteConnection, envelope: IncomingMessageV1) {
     let msg = envelope.data_message.unwrap();
     let timestamp = msg.timestamp.unwrap();
     let number = envelope.source.unwrap().number.unwrap();
-    let attachments = database::store_attachments(db, msg.attachments.as_ref());
+    let attachments = database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref());
 
     if !msg.body.is_some() {
         return;
@@ -99,11 +98,36 @@ fn handle_data_msg(db: &SqliteConnection, envelope: IncomingMessageV1) {
         mentions_start
     };
 
-    database::store_message(db, msg);
+    database::store_message(&db.lock().unwrap(), msg);
 }
 
-fn handle_sync_message(_db: &SqliteConnection, _msg: JsonSyncMessageV1) {
+fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1) {
+    if let Some(sent) = msg.sent {
+        let msg_packet = sent.message.unwrap();
+        let destination = sent.destination.unwrap();
+        let (mentions, mentions_start) = database::convert_mentions(&msg_packet.mentions);
+        let msg = NewMessage {
+            timestamp: sent.timestamp.unwrap(),
+            number: destination.number.unwrap(),
+            from_me: true,
+            body: msg_packet.body.as_ref().unwrap().as_str(),
+            attachments: database::store_attachments(&db.lock().unwrap(), msg_packet.attachments.as_ref()),
+            groupid: msg_packet.group_v_2.as_ref().map(|group| {
+                group.id.as_ref().unwrap().as_str()
+            }),
+            quote_timestamp: msg_packet.quote.as_ref().map(|quote| {
+                quote.id.unwrap()
+            }),
+            quote_author: msg_packet.quote.as_ref().map(|quote| {
+                quote.author.as_ref().unwrap().number.as_ref().unwrap().as_str()
+            }),
+            mentions,
+            mentions_start
+        };
+
+        database::store_message(&db.lock().unwrap(), msg);
+    }
 }
 
-fn handle_reaction(_db: &SqliteConnection, _envelope: IncomingMessageV1) {
+fn handle_reaction(_db: Arc<Mutex<SqliteConnection>>, _envelope: IncomingMessageV1) {
 }

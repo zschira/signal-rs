@@ -103,3 +103,20 @@ pub fn query_conversation(db: &SqliteConnection, conversation: &ConversationType
         }
     }
 }
+
+pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: String, from_me_q: bool, groupid_q: Option<String>) -> Message {
+    use crate::schema::messages::dsl::*;
+
+    let mut query = messages.filter(number.eq(number_q.as_str()))
+        .filter(timestamp.eq(timestamp_q))
+        .filter(from_me.eq(from_me_q))
+        .into_boxed();
+
+    match groupid_q {
+        Some(gid) => { query = query.filter(groupid.eq(gid)); },
+        None => { query = query.filter(groupid.is_null()); }
+    }
+
+    query.get_result(db)
+        .expect("Couldn't find message")
+}

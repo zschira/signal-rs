@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use signald::types::{SignaldTypes, ListAccountsRequestV1, ListContactsRequestV1,
                      ListGroupsRequestV1, RequestSyncRequestV1, SubscribeRequestV1};
@@ -25,17 +26,18 @@ pub struct App {
     signald_sender: Sender<SignaldInteraction>,
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
     main_view: RefCell<Option<Rc<ScrolledWindow>>>,
-    db: SqliteConnection
+    db: Arc<Mutex<SqliteConnection>>
 }
 
 impl App {
     pub fn new(application: &Application) -> Rc<Self> {
         let (sender, receiver) = bounded(10);
         let main_context = MainContext::default();
+        let db = Arc::new(Mutex::new(establish_connection()));
 
-        main_context.spawn_local(async move {
-            listen(receiver).await;
-        });
+        main_context.spawn_local(clone!(@strong db => async move {
+            listen(db, receiver).await;
+        }));
 
         let app = Rc::new(App {
             account: RefCell::new(String::new()),
@@ -43,7 +45,7 @@ impl App {
             signald_sender: sender,
             conversations: RefCell::new(Vec::new()),
             main_view: RefCell::new(None),
-            db: establish_connection()
+            db
         });
 
         application.connect_activate(clone!(@strong app => move |_| {

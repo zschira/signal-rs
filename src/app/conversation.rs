@@ -6,6 +6,7 @@ use gtk::glib::{self, clone, MainContext};
 use gtk::gio;
 use std::rc::Rc;
 use std::cell::Cell;
+use std::sync::{Arc, Mutex};
 use chrono;
 use diesel::sqlite::SqliteConnection;
 
@@ -126,7 +127,7 @@ impl App {
                 msg_entry.delete_text(0, -1);
 
                 let msg = construct_message(&app.account.borrow(), conversation.clone(), msg_body);
-                store_message(&app.db, &msg);
+                store_message(app.db.clone(), &msg);
 
                 main_context.spawn_local(clone!(@weak msg_entry, @strong app =>
                     async move {
@@ -157,7 +158,7 @@ impl App {
 
     fn get_messages(self: Rc<App>, conversation: Rc<Conversation>) -> ScrolledWindow {
         let model = gio::ListStore::new(MessageObject::static_type());
-        let messages = database::query_conversation(&self.db, &conversation.conversation_type);
+        let messages = database::query_conversation(&self.db.lock().unwrap(), &conversation.conversation_type);
 
         for message in messages {
             if !message.body.is_empty() {
@@ -180,15 +181,15 @@ impl App {
             );
         });
 
-        factory.connect_bind(move |_, list_item| {
+        factory.connect_bind(clone!(@strong self as app => move |_, list_item| {
             let msg = list_item
                 .item()
                 .expect("The item has to exist.")
                 .downcast::<MessageObject>()
                 .expect("The item has to be a MessageObject");
 
-            let body = msg
-                .property("body")
+            let number = msg
+                .property("number")
                 .expect("The property needs to exist and be readable.")
                 .get::<String>()
                 .expect("The property needs to be of type String");
@@ -200,10 +201,24 @@ impl App {
                 .expect("The property needs to be of type bool");
 
             let timestamp = msg
-                .property("from-me")
+                .property("timestamp")
                 .expect("The property needs to exist and be readable.")
-                .get::<bool>()
+                .get::<i64>()
                 .expect("The property needs to be of type bool");
+
+            let groupid = msg
+                .property("groupid")
+                .expect("The property needs to exist and be readable.")
+                .get::<Option<String>>()
+                .expect("The property needs to be of type bool");
+
+            let message = database::get_message(
+                &app.db.lock().unwrap(),
+                timestamp,
+                number,
+                from_me,
+                groupid
+            );
 
             // Get `Label` from `ListItem`
             let msg_box = list_item
@@ -223,7 +238,7 @@ impl App {
             }
 
             let label = Label::builder()
-                .label(body.as_str())
+                .label(message.body.as_str())
                 .wrap(true)
                 .css_classes(vec!["messageText".to_owned()])
                 .justify(Justification::Left)
@@ -235,7 +250,7 @@ impl App {
                 .build();
 
             msg_box.append(&label);
-        });
+        }));
 
         let selection_model = SingleSelection::new(Some(&model));
         let list_view = ListView::new(Some(&selection_model), Some(&factory));
@@ -267,7 +282,7 @@ impl App {
     }
 }
 
-fn store_message(db: &SqliteConnection, msg: &SendRequestV1) {
+fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1) {
     let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
     let msg = NewMessage {
         timestamp: msg.timestamp.unwrap(),
@@ -275,7 +290,7 @@ fn store_message(db: &SqliteConnection, msg: &SendRequestV1) {
             address.number.as_ref().unwrap().clone()
         }).unwrap(),
         from_me: true,
-        attachments: database::store_attachments(db, msg.attachments.as_ref()),
+        attachments: database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref()),
         body: msg.message_body.as_ref().unwrap().as_str(),
         groupid: msg.recipient_group_id.as_ref().map(|id| id.as_str()),
         quote_timestamp: msg.quote.as_ref().map(|quote| quote.id.unwrap()),
@@ -286,7 +301,7 @@ fn store_message(db: &SqliteConnection, msg: &SendRequestV1) {
         mentions_start
     };
 
-    database::store_message(db, msg);
+    database::store_message(&db.lock().unwrap(), msg);
 }
 
 fn construct_message(username: &String, conversation: Rc<Conversation>, body: String) -> SendRequestV1 {
