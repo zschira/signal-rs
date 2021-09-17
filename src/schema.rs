@@ -12,6 +12,7 @@ table! {
         timestamp -> BigInt,
         number -> Nullable<Text>,
         from_me -> Bool,
+        is_read -> Bool,
         attachments -> Nullable<Text>,
         body -> Text,
         groupid -> Nullable<Text>,
@@ -19,6 +20,8 @@ table! {
         quote_author -> Nullable<Text>,
         mentions -> Nullable<Binary>,
         mentions_start -> Nullable<Binary>,
+        reaction_emojis -> Nullable<Text>,
+        reaction_authors -> Nullable<Text>,
     }
 }
 

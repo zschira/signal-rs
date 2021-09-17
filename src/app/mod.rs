@@ -9,7 +9,7 @@ use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, ScrolledWindow, Widget};
 use gtk::glib::{clone, MainContext};
 
-use async_std::channel::{bounded, Sender};
+use async_std::channel::{bounded, Sender, Receiver};
 
 use crate::signald_bridge::{listen, SignaldInteraction};
 use crate::database::establish_connection;
@@ -19,31 +19,41 @@ pub mod load_app;
 pub mod main_view;
 pub mod conversation;
 pub mod message;
+pub mod notifications;
+
+use notifications::Notification;
+use conversation::ConversationType;
+use message::MessageObject;
 
 pub struct App {
     account: RefCell<String>,
     window: ApplicationWindow,
     signald_sender: Sender<SignaldInteraction>,
+    notification_receiver: Receiver<Notification>,
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
+    active_conversation: RefCell<Option<Rc<conversation::Conversation>>>,
     main_view: RefCell<Option<Rc<ScrolledWindow>>>,
     db: Arc<Mutex<SqliteConnection>>
 }
 
 impl App {
     pub fn new(application: &Application) -> Rc<Self> {
-        let (sender, receiver) = bounded(10);
+        let (msg_sender, msg_receiver) = bounded(10);
+        let (notification_sender, notification_receiver) = bounded(10);
         let main_context = MainContext::default();
         let db = Arc::new(Mutex::new(establish_connection()));
 
         main_context.spawn_local(clone!(@strong db => async move {
-            listen(db, receiver).await;
+            listen(db, msg_receiver, notification_sender).await;
         }));
 
         let app = Rc::new(App {
             account: RefCell::new(String::new()),
             window: ApplicationWindow::new(application),
-            signald_sender: sender,
+            signald_sender: msg_sender,
+            notification_receiver, 
             conversations: RefCell::new(Vec::new()),
+            active_conversation: RefCell::new(None),
             main_view: RefCell::new(None),
             db
         });
@@ -97,7 +107,7 @@ impl App {
                 )
             ).await;
 
-            self.dispatch(
+            self.clone().dispatch(
                 "request_sync",
                 SignaldTypes::RequestSyncRequestV1(
                     RequestSyncRequestV1 {
@@ -111,6 +121,57 @@ impl App {
             ).await;
         } else {
             panic!("Incorrect return type from list_accounts call");
+        }
+
+        self.handle_notification().await;
+    }
+
+    async fn handle_notification(self: Rc<App>) {
+        loop {
+            let notification = self.notification_receiver.recv().await
+                .expect("Failed to receive notification");
+            
+            match notification {
+                Notification::NewMessage(msg) => {
+                    if let Some(conv) = self.active_conversation.borrow().as_ref() {
+                        let notify_ui = match &conv.as_ref().conversation_type {
+                            ConversationType::Individual(profile) => {
+                                let number = profile.address
+                                    .as_ref()
+                                    .unwrap()
+                                    .number
+                                    .as_ref()
+                                    .unwrap();
+
+                                let msg_number = msg.number.as_ref()
+                                    .map(|msg| msg.as_str())
+                                    .unwrap_or_default();
+
+                                number.as_str() == msg_number
+                            },
+                            ConversationType::Group(group) => {
+                                let groupid = group.id.as_ref().unwrap();
+                                let msg_groupid = msg.groupid.as_ref()
+                                    .map(|groupid| groupid.as_str())
+                                    .unwrap_or_default();
+
+                                groupid.as_str() == msg_groupid
+                            }
+                        };
+
+                        if notify_ui {
+                            conv.as_ref()
+                                .model
+                                .borrow_mut()
+                                .as_ref()
+                                .unwrap()
+                                .append(&MessageObject::new_sent(&msg));
+                        }
+                    }
+                },
+                Notification::Reaction(_reaction) => {
+                }
+            }
         }
     }
 

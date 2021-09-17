@@ -5,8 +5,11 @@ use uuid::Uuid;
 use diesel::sqlite::SqliteConnection;
 use std::sync::{Arc, Mutex};
 
+use gtk::glib::clone;
+
 use crate::database;
 use crate::models::NewMessage;
+use crate::app::notifications::Notification;
 
 pub struct SignaldInteraction {
     pub key: &'static str,
@@ -14,11 +17,16 @@ pub struct SignaldInteraction {
     pub response_channel: Option<Sender<SignaldInteraction>>
 }
 
-pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<SignaldInteraction>) {
+pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<SignaldInteraction>, sender: Sender<Notification>) {
     let mut signald = Signald::connect(
         "run/signald.sock",
         move |msg| {
-            message_handler(db.clone(), msg);
+            // Use async std runtime to manage future as that's what's being used
+            // by the socket (also will eventually allow gtk main loop to fully
+            // block while app is not open)
+            async_std::task::spawn(clone!(@strong db, @strong sender => async move {
+                message_handler(db, msg, sender).await;
+            }));
         }
     ).await.expect("Failed to open socket to signald");
 
@@ -48,15 +56,15 @@ pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<Signald
     }
 }
 
-fn message_handler(db: Arc<Mutex<SqliteConnection>>, msg: IncomingMessageV1) {
+async fn message_handler(db: Arc<Mutex<SqliteConnection>>, msg: IncomingMessageV1, sender: Sender<Notification>) {
     if msg.data_message.is_some() {
-        handle_data_msg(db, msg);
+        handle_data_msg(db, msg, sender).await;
     } else if msg.sync_message.is_some() {
         handle_sync_message(db, msg.sync_message.unwrap());
     }
 }
 
-fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1) {
+async fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1, sender: Sender<Notification>) {
     // Check that message isn't just a reaction
     if envelope.data_message.as_ref().unwrap().reaction.is_some() {
         handle_reaction(db, envelope);
@@ -73,15 +81,15 @@ fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1
         return;
     }
 
-    let body = msg.body.as_ref().unwrap();
+    let body = msg.body.unwrap();
     let groupid = msg.group_v_2.as_ref().map(|group| {
-        group.id.as_ref().unwrap().as_str()
+        group.id.as_ref().unwrap().clone()
     });
     let quote_timestamp = msg.quote.as_ref().map(|quote| {
         quote.id.unwrap()
     });
     let quote_author = msg.quote.as_ref().map(|quote| {
-        quote.author.as_ref().unwrap().number.as_ref().unwrap().as_str()
+        quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
     });
     let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
 
@@ -89,19 +97,27 @@ fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMessageV1
         timestamp,
         number,
         from_me: false,
+        is_read: false,
         attachments,
         body,
         groupid,
         quote_timestamp,
         quote_author,
         mentions,
-        mentions_start
+        mentions_start,
+        reaction_emojis: None,
+        reaction_authors: None
     };
 
     database::store_message(&db.lock().unwrap(), &msg);
+    sender.send(Notification::NewMessage(msg)).await.expect("Failed to send notification");
 }
 
 fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1) {
+    if let Some(fetch_type) = msg.fetch_type {
+        println!("Sync fetch type: {}", fetch_type);
+    }
+
     if let Some(sent) = msg.sent {
         let msg_packet = sent.message.unwrap();
         let destination = sent.destination.unwrap();
@@ -110,19 +126,22 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
             timestamp: sent.timestamp.unwrap(),
             number: destination.number,
             from_me: true,
-            body: msg_packet.body.as_ref().unwrap().as_str(),
+            is_read: false,
+            body: msg_packet.body.unwrap(),
             attachments: database::store_attachments(&db.lock().unwrap(), msg_packet.attachments.as_ref()),
             groupid: msg_packet.group_v_2.as_ref().map(|group| {
-                group.id.as_ref().unwrap().as_str()
+                group.id.as_ref().unwrap().clone()
             }),
             quote_timestamp: msg_packet.quote.as_ref().map(|quote| {
                 quote.id.unwrap()
             }),
             quote_author: msg_packet.quote.as_ref().map(|quote| {
-                quote.author.as_ref().unwrap().number.as_ref().unwrap().as_str()
+                quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
             }),
             mentions,
-            mentions_start
+            mentions_start,
+            reaction_emojis: None,
+            reaction_authors: None
         };
 
         database::store_message(&db.lock().unwrap(), &msg);

@@ -5,28 +5,34 @@ pub struct Message {
     pub timestamp: i64,
     pub number: Option<String>,
     pub from_me: bool,
+    pub is_read: bool,
     pub attachments: Option<String>,
     pub body: String,
     pub groupid: Option<String>,
     pub quote_timestamp: Option<i64>,
     pub quote_author: Option<String>,
     pub mentions: Option<Vec<u8>>,
-    pub mentions_start: Option<Vec<u8>>
+    pub mentions_start: Option<Vec<u8>>,
+    pub reaction_emojis: Option<String>,
+    pub reaction_authors: Option<String>
 }
 
 #[derive(Insertable)]
 #[table_name = "messages"]
-pub struct NewMessage<'a> {
+pub struct NewMessage {
     pub timestamp: i64,
     pub number: Option<String>,
     pub from_me: bool,
+    pub is_read: bool,
     pub attachments: Option<String>,
-    pub body: &'a str,
-    pub groupid: Option<&'a str>,
+    pub body: String,
+    pub groupid: Option<String>,
     pub quote_timestamp: Option<i64>,
-    pub quote_author: Option<&'a str>,
+    pub quote_author: Option<String>,
     pub mentions: Option<Vec<u8>>,
-    pub mentions_start: Option<Vec<u8>>
+    pub mentions_start: Option<Vec<u8>>,
+    pub reaction_emojis: Option<String>,
+    pub reaction_authors: Option<String>
 }
 
 #[derive(Queryable)]

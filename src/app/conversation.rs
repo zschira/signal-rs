@@ -24,8 +24,8 @@ pub enum ConversationType {
 
 pub struct Conversation {
     pub conversation_type: ConversationType,
-    model: RefCell<Option<gio::ListStore>>,
-    typing: RefCell<bool>
+    pub model: RefCell<Option<gio::ListStore>>,
+    pub typing: RefCell<bool>
 }
 
 impl Conversation {
@@ -64,6 +64,7 @@ impl Conversation {
 
         back_button.connect_clicked(move |_| {
             app.update_ui(app.clone().main_view_ui().as_ref());
+            app.active_conversation.replace(None);
         });
 
         let name = Label::builder()
@@ -96,7 +97,6 @@ impl Conversation {
 
         hbox
     }
-
 }
 
 impl App {
@@ -150,10 +150,13 @@ impl App {
             .build();
 
         vbox.append(&header);
-        vbox.append(&self.get_messages(conversation));
+        vbox.append(&self.get_messages(conversation.clone()));
         vbox.append(&msg_box);
 
         app.update_ui(&vbox);
+
+        // Indicate that current coversation is active
+        app.active_conversation.replace(Some(conversation));
     }
 
     fn get_messages(self: Rc<App>, conversation: Rc<Conversation>) -> ScrolledWindow {
@@ -188,38 +191,6 @@ impl App {
                 .downcast::<MessageObject>()
                 .expect("The item has to be a MessageObject");
 
-            let number = msg
-                .property("number")
-                .expect("The property needs to exist and be readable.")
-                .get::<Option<String>>()
-                .expect("The property needs to be of type String");
-
-            let from_me = msg
-                .property("from-me")
-                .expect("The property needs to exist and be readable.")
-                .get::<bool>()
-                .expect("The property needs to be of type bool");
-
-            let timestamp = msg
-                .property("timestamp")
-                .expect("The property needs to exist and be readable.")
-                .get::<i64>()
-                .expect("The property needs to be of type bool");
-
-            let groupid = msg
-                .property("groupid")
-                .expect("The property needs to exist and be readable.")
-                .get::<Option<String>>()
-                .expect("The property needs to be of type bool");
-
-            let message = database::get_message(
-                &app.db.lock().unwrap(),
-                timestamp,
-                number,
-                from_me,
-                groupid
-            );
-
             // Get `Label` from `ListItem`
             let msg_box = list_item
                 .child()
@@ -227,29 +198,7 @@ impl App {
                 .downcast::<Box_>()
                 .expect("The child has to be a Box");
 
-            if from_me {
-                msg_box.set_halign(Align::End);
-                msg_box.set_css_classes(&["messageSent"]);
-                msg_box.set_margin_start(200);
-            } else {
-                msg_box.set_halign(Align::Start);
-                msg_box.set_css_classes(&["messageReceived"]);
-                msg_box.set_margin_end(200);
-            }
-
-            let label = Label::builder()
-                .label(message.body.as_str())
-                .wrap(true)
-                .css_classes(vec!["messageText".to_owned()])
-                .justify(Justification::Left)
-                .halign(Align::Start)
-                .margin_bottom(5)
-                .margin_top(5)
-                .margin_start(5)
-                .margin_end(5)
-                .build();
-
-            msg_box.append(&label);
+            message_ui(msg, app.db.clone(), msg_box);
         }));
 
         let selection_model = SingleSelection::new(Some(&model));
@@ -284,6 +233,64 @@ impl App {
     }
 }
 
+fn message_ui(msg: MessageObject, db: Arc<Mutex<SqliteConnection>>, msg_box: Box_) {
+    let number = msg
+        .property("number")
+        .expect("The property needs to exist and be readable.")
+        .get::<Option<String>>()
+        .expect("The property needs to be of type String");
+
+    let from_me = msg
+        .property("from-me")
+        .expect("The property needs to exist and be readable.")
+        .get::<bool>()
+        .expect("The property needs to be of type bool");
+
+    let timestamp = msg
+        .property("timestamp")
+        .expect("The property needs to exist and be readable.")
+        .get::<i64>()
+        .expect("The property needs to be of type bool");
+
+    let groupid = msg
+        .property("groupid")
+        .expect("The property needs to exist and be readable.")
+        .get::<Option<String>>()
+        .expect("The property needs to be of type bool");
+
+    let msg = database::get_message(
+        &db.lock().unwrap(),
+        timestamp,
+        number,
+        from_me,
+        groupid
+    );
+
+    if from_me {
+        msg_box.set_halign(Align::End);
+        msg_box.set_css_classes(&["messageSent"]);
+        msg_box.set_margin_start(200);
+    } else {
+        msg_box.set_halign(Align::Start);
+        msg_box.set_css_classes(&["messageReceived"]);
+        msg_box.set_margin_end(200);
+    }
+
+    let label = Label::builder()
+        .label(msg.body.as_str())
+        .wrap(true)
+        .css_classes(vec!["messageText".to_owned()])
+        .justify(Justification::Left)
+        .halign(Align::Start)
+        .margin_bottom(5)
+        .margin_top(5)
+        .margin_start(5)
+        .margin_end(5)
+        .build();
+
+    msg_box.append(&label);
+}
+
 fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1, conversation: Rc<Conversation>) {
     let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
     let msg = NewMessage {
@@ -292,15 +299,18 @@ fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1, conversa
             address.number.as_ref().unwrap().clone()
         }),
         from_me: true,
+        is_read: false,
         attachments: database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref()),
-        body: msg.message_body.as_ref().unwrap().as_str(),
-        groupid: msg.recipient_group_id.as_ref().map(|id| id.as_str()),
+        body: msg.message_body.as_ref().unwrap().clone(),
+        groupid: msg.recipient_group_id.as_ref().map(|id| id.clone()),
         quote_timestamp: msg.quote.as_ref().map(|quote| quote.id.unwrap()),
         quote_author: msg.quote.as_ref().map(|quote| {
-            quote.author.as_ref().unwrap().number.as_ref().unwrap().as_str()
+            quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
         }),
         mentions,
-        mentions_start
+        mentions_start,
+        reaction_emojis: None,
+        reaction_authors: None
     };
 
     database::store_message(&db.lock().unwrap(), &msg);
