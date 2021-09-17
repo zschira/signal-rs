@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use chrono;
 use diesel::sqlite::SqliteConnection;
 
-use signald::types::{ProfileV1, JsonGroupV2InfoV1, SendRequestV1, SignaldTypes};
+use signald::types::{ProfileV1, JsonGroupV2InfoV1,
+                     SendRequestV1, SignaldTypes};
 
 use crate::app::App;
 use crate::models::NewMessage;
@@ -24,24 +25,57 @@ pub enum ConversationType {
 
 pub struct Conversation {
     pub conversation_type: ConversationType,
+    pub name: String,
+    number: Option<String>,
+    groupid: Option<String>,
     pub model: RefCell<Option<gio::ListStore>>,
-    pub typing: RefCell<bool>
+    pub typing: RefCell<bool>,
+    pub last_message_time: RefCell<i64>
 }
 
 impl Conversation {
     pub fn new_individual(profile: ProfileV1) -> Self {
+        // Ask for profile from signal if known profile is incomplete
+        let name = match profile.name.as_ref() {
+            Some(name) => name.clone(),
+            None => profile.profile_name.as_ref().unwrap().clone()
+        };
+        let number = profile.address.as_ref().unwrap().number.as_ref().unwrap().clone();
+
         Conversation {
             conversation_type: ConversationType::Individual(profile),
+            name,
+            number: Some(number),
+            groupid: None,
             model: RefCell::new(None),
-            typing: RefCell::new(false)
+            typing: RefCell::new(false),
+            last_message_time: RefCell::new(i64::MIN)
         }
     }
 
     pub fn new_group(group: JsonGroupV2InfoV1) -> Self {
+        let name = group.title.as_ref().unwrap().clone();
+        let groupid = group.id.as_ref().unwrap().clone();
         Conversation {
             conversation_type: ConversationType::Group(group),
+            name,
+            number: None,
+            groupid: Some(groupid),
             model: RefCell::new(None),
-            typing: RefCell::new(false)
+            typing: RefCell::new(false),
+            last_message_time: RefCell::new(i64::MIN)
+        }
+    }
+
+    pub fn set_last_message(&self, db: &SqliteConnection) {
+        let msg = database::get_most_recent_message(
+            db,
+            &self.number,
+            &self.groupid
+        );
+        if let Some(msg) = msg {
+        println!("{}: {}", msg.timestamp, msg.body);
+            self.last_message_time.replace(msg.timestamp);
         }
     }
 
@@ -63,7 +97,7 @@ impl Conversation {
             .build();
 
         back_button.connect_clicked(move |_| {
-            app.update_ui(app.clone().main_view_ui().as_ref());
+            app.update_ui(&app.clone().main_view_ui(), "main_view");
             app.active_conversation.replace(None);
         });
 
@@ -153,7 +187,7 @@ impl App {
         vbox.append(&self.get_messages(conversation.clone()));
         vbox.append(&msg_box);
 
-        app.update_ui(&vbox);
+        app.update_ui(&vbox, "conversation");
 
         // Indicate that current coversation is active
         app.active_conversation.replace(Some(conversation));

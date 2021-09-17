@@ -13,6 +13,7 @@ use async_std::channel::{bounded, Sender, Receiver};
 
 use crate::signald_bridge::{listen, SignaldInteraction};
 use crate::database::establish_connection;
+use crate::models::NewMessage;
 
 pub mod link_device;
 pub mod load_app;
@@ -32,7 +33,7 @@ pub struct App {
     notification_receiver: Receiver<Notification>,
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
     active_conversation: RefCell<Option<Rc<conversation::Conversation>>>,
-    main_view: RefCell<Option<Rc<ScrolledWindow>>>,
+    curr_view: RefCell<&'static str>,
     db: Arc<Mutex<SqliteConnection>>
 }
 
@@ -54,7 +55,7 @@ impl App {
             notification_receiver, 
             conversations: RefCell::new(Vec::new()),
             active_conversation: RefCell::new(None),
-            main_view: RefCell::new(None),
+            curr_view: RefCell::new("none"),
             db
         });
 
@@ -86,7 +87,10 @@ impl App {
                 Some(account) => account.account_id.unwrap(),
                 None => {
                     let (sender, receiver) = bounded(1);
-                    self.update_ui(&link_device::build_ui(self.clone(), sender));
+                    self.update_ui(
+                        &link_device::build_ui(self.clone(), sender),
+                        "new_device"
+                    );
                     receiver.recv().await.expect("Can't get account number")
                 }
             };
@@ -96,7 +100,8 @@ impl App {
             *self.conversations.borrow_mut() = self.clone()
                 .get_conversations(&account).await;
 
-            self.update_ui(self.clone().main_view_ui().as_ref());
+            self.clone().order_conversations();
+            self.update_ui(&self.clone().main_view_ui(), "main_view");
 
             self.clone().dispatch(
                 "subscribe",
@@ -123,56 +128,79 @@ impl App {
             panic!("Incorrect return type from list_accounts call");
         }
 
-        self.handle_notification().await;
+        self.handle_notifications().await;
     }
 
-    async fn handle_notification(self: Rc<App>) {
+    async fn handle_notifications(self: Rc<App>) {
         loop {
-            let notification = self.notification_receiver.recv().await
+            let notification = self.clone()
+                .notification_receiver.recv()
+                .await
                 .expect("Failed to receive notification");
             
             match notification {
                 Notification::NewMessage(msg) => {
-                    if let Some(conv) = self.active_conversation.borrow().as_ref() {
-                        let notify_ui = match &conv.as_ref().conversation_type {
-                            ConversationType::Individual(profile) => {
-                                let number = profile.address
-                                    .as_ref()
-                                    .unwrap()
-                                    .number
-                                    .as_ref()
-                                    .unwrap();
-
-                                let msg_number = msg.number.as_ref()
-                                    .map(|msg| msg.as_str())
-                                    .unwrap_or_default();
-
-                                number.as_str() == msg_number
-                            },
-                            ConversationType::Group(group) => {
-                                let groupid = group.id.as_ref().unwrap();
-                                let msg_groupid = msg.groupid.as_ref()
-                                    .map(|groupid| groupid.as_str())
-                                    .unwrap_or_default();
-
-                                groupid.as_str() == msg_groupid
-                            }
-                        };
-
-                        if notify_ui {
-                            conv.as_ref()
-                                .model
-                                .borrow_mut()
-                                .as_ref()
-                                .unwrap()
-                                .append(&MessageObject::new_sent(&msg));
-                        }
-                    }
+                    self.clone().message_notification(msg).await;
                 },
                 Notification::Reaction(_reaction) => {
                 }
             }
         }
+    }
+
+    async fn message_notification(self: Rc<App>, msg: NewMessage) {
+        self.clone().order_conversations();
+        if self.curr_view.borrow().eq("main_view") {
+            self.clone().update_ui(&self.clone().main_view_ui(), "main_view");
+        }
+
+        if let Some(conv) = self.active_conversation.borrow().as_ref() {
+            let notify_ui = match &conv.as_ref().conversation_type {
+                ConversationType::Individual(profile) => {
+                    let number = profile.address
+                        .as_ref()
+                        .unwrap()
+                        .number
+                        .as_ref()
+                        .unwrap();
+
+                    let msg_number = msg.number.as_ref()
+                        .map(|msg| msg.as_str())
+                        .unwrap_or_default();
+
+                    number.as_str() == msg_number
+                },
+                ConversationType::Group(group) => {
+                    let groupid = group.id.as_ref().unwrap();
+                    let msg_groupid = msg.groupid.as_ref()
+                        .map(|groupid| groupid.as_str())
+                        .unwrap_or_default();
+
+                    groupid.as_str() == msg_groupid
+                }
+            };
+
+            if notify_ui {
+                conv.as_ref()
+                    .model
+                    .borrow_mut()
+                    .as_ref()
+                    .unwrap()
+                    .append(&MessageObject::new_sent(&msg));
+            }
+        }
+    }
+
+    fn order_conversations(self: Rc<App>) {
+        self.conversations.borrow().iter().for_each(|conv| {
+            conv.set_last_message(&self.db.lock().unwrap());
+        });
+
+        self.conversations.borrow_mut().sort_by(|c1, c2| {
+            c2.last_message_time.borrow().cmp(
+                &c1.last_message_time.borrow()
+            )
+        });
     }
 
     pub async fn dispatch(self: Rc<App>, key: &'static str, msg: SignaldTypes) -> SignaldTypes {
@@ -190,7 +218,8 @@ impl App {
             .expect("Couldn't receive signald response").msg
     }
 
-    pub fn update_ui<P: IsA<Widget>>(&self, child: &P) {
+    pub fn update_ui<P: IsA<Widget>>(&self, child: &P, view: &'static str) {
+        self.curr_view.replace(view);
         self.window.set_child(Some(child));
     }
 

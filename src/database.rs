@@ -124,3 +124,23 @@ pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: Option<Str
     query.get_result(db)
         .expect("Couldn't find message")
 }
+
+pub fn get_most_recent_message(db: &SqliteConnection, number_q: &Option<String>, groupid_q: &Option<String>) -> Option<Message> {
+    use crate::schema::messages::dsl::*;
+    let mut query = messages
+        //.order_by(timestamp.desc())
+        .into_boxed();
+
+    match number_q {
+        Some(number_q) => { query = query.filter(number.eq(number_q)); },
+        None => { } // Ignore number and just query by groupid
+    }
+
+    match groupid_q {
+        Some(gid) => { println!("{}", gid); query = query.filter(groupid.eq(gid)); },
+        None => { query = query.filter(groupid.is_null()); }
+    }
+
+    query.get_result(db)
+        .ok()
+}

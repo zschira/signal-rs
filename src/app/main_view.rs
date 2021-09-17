@@ -3,15 +3,10 @@ use gtk::{Button, Box as Box_, Label, HeaderBar, Orientation, ScrolledWindow, Po
 use gtk::glib::clone;
 use std::rc::Rc;
 
-use crate::app::conversation::ConversationType;
 use crate::app::App;
 
 impl App {
-    pub fn main_view_ui(self: Rc<App>) -> Rc<ScrolledWindow> {
-        if self.main_view.borrow().is_some() {
-            return self.main_view.borrow().as_ref().unwrap().clone();
-        }
-
+    pub fn main_view_ui(self: Rc<App>) -> ScrolledWindow {
         let vbox = Box_::new(Orientation::Vertical, 5);
 
         let header = HeaderBar::builder()
@@ -22,13 +17,8 @@ impl App {
         vbox.append(&header);
 
         self.conversations.borrow().iter().for_each(|conversation| {
-            let label = match &conversation.conversation_type {
-                ConversationType::Individual(individual) => individual.name.as_ref().unwrap().clone(),
-                ConversationType::Group(group) => group.title.as_ref().unwrap().clone()
-            };
-
             let label = Label::builder()
-                .label(&format!("{}", label))
+                .label(&conversation.name)
                 .css_classes(vec!["label1".to_owned()])
                 .halign(gtk::Align::Start)
                 .build();
@@ -45,12 +35,10 @@ impl App {
             vbox.append(&conv_button);
         });
 
-        let scroll = ScrolledWindow::builder()
+        ScrolledWindow::builder()
             .hscrollbar_policy(PolicyType::Never)
             .child(&vbox)
-            .build();
-
-        Rc::new(scroll)
+            .build()
     }
 }
 

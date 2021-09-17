@@ -48,7 +48,7 @@ pub fn build_ui(app: Rc<App>, sender: Sender<String>) -> Box_ {
         .build();
 
     button1.connect_clicked(clone!(@strong app => move |_| {
-        app.update_ui(&register_ui(app.clone()));
+        app.update_ui(&register_ui(app.clone()), "register");
     }));
 
     let button2 = Button::builder()
@@ -64,7 +64,7 @@ pub fn build_ui(app: Rc<App>, sender: Sender<String>) -> Box_ {
                     button.set_sensitive(false);
                     button1.set_sensitive(false);
                     let linking = handle_clicked(app.clone()).await.unwrap();
-                    app.update_ui(&link_ui(app.clone(), linking, sender));
+                    app.update_ui(&link_ui(app.clone(), linking, sender), "link");
                 }
             ));
         }
