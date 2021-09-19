@@ -6,7 +6,7 @@ use signald::types::{SignaldTypes, ListAccountsRequestV1, ListContactsRequestV1,
 use diesel::sqlite::SqliteConnection;
 
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, ScrolledWindow, Widget};
+use gtk::{Application, ApplicationWindow, Widget};
 use gtk::glib::{clone, MainContext};
 
 use async_std::channel::{bounded, Sender, Receiver};
@@ -21,6 +21,7 @@ pub mod main_view;
 pub mod conversation;
 pub mod message;
 pub mod notifications;
+pub mod message_input;
 
 use notifications::Notification;
 use conversation::ConversationType;
@@ -253,12 +254,16 @@ impl App {
 
 fn get_profiles(contacts: SignaldTypes) -> Vec<Rc<conversation::Conversation>> {
     if let SignaldTypes::ProfileListV1(profiles) = contacts {
-        profiles.profiles.unwrap().drain(..).map(|profile| {
-            Rc::new(conversation::Conversation::new_individual(profile))
+        profiles.profiles.unwrap().drain(..).filter_map(|profile| {
+            conversation::Conversation::new_individual(profile).map(|conv| {
+                Rc::new(conv)
+            })
         }).collect()
     } else if let SignaldTypes::GroupListV1(groups) = contacts {
-        groups.groups.unwrap().drain(..).map(|group| {
-            Rc::new(conversation::Conversation::new_group(group))
+        groups.groups.unwrap().drain(..).filter_map(|group| {
+            conversation::Conversation::new_group(group).map(|conv| {
+                Rc::new(conv)
+            })
         }).collect()
     } else {
         panic!("Wrong type");

@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use diesel::sqlite::SqliteConnection;
+use diesel::sqlite::{Sqlite, SqliteConnection};
 use dotenv::dotenv;
 use std::env;
 use uuid::Uuid;
@@ -104,6 +104,40 @@ pub fn query_conversation(db: &SqliteConnection, conversation: &ConversationType
 }
 
 pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: Option<String>, from_me_q: bool, groupid_q: Option<String>) -> Message {
+    let query = construct_message_query(timestamp_q, number_q, from_me_q, groupid_q);
+
+    query.get_result(db)
+        .expect("Can't find message")
+}
+
+pub fn mark_read(db: &SqliteConnection, timestamps: Vec<i64>) {
+    use crate::schema::messages::dsl::*;
+
+    for timestamp_q in timestamps {
+        let query = messages.filter(timestamp.eq(timestamp_q))
+            .filter(from_me.eq(true));
+
+        diesel::update(query)
+            .set(is_read.eq(true))
+            .execute(db)
+            .expect("Couldn't mark message as read");
+    }
+}
+
+pub fn read_message(db: &SqliteConnection, timestamp_q: i64, number_q: String) {
+    use crate::schema::messages::dsl::*;
+
+    // Number must be some because this is for received messages
+    let query = messages.filter(timestamp.eq(timestamp_q))
+        .filter(number.eq(number_q));
+
+    diesel::update(query)
+        .set(is_read.eq(true))
+        .execute(db)
+        .expect("Couldn't mark message as read");
+}
+
+fn construct_message_query<'a>(timestamp_q: i64, number_q: Option<String>, from_me_q: bool, groupid_q: Option<String>) -> messages::BoxedQuery<'a, Sqlite> {
     use crate::schema::messages::dsl::*;
 
     let mut query = messages
@@ -121,8 +155,7 @@ pub fn get_message(db: &SqliteConnection, timestamp_q: i64, number_q: Option<Str
         None => { query = query.filter(groupid.is_null()); }
     }
 
-    query.get_result(db)
-        .expect("Couldn't find message")
+    query
 }
 
 pub fn get_most_recent_message(db: &SqliteConnection, number_q: &Option<String>, groupid_q: &Option<String>) -> Option<Message> {
@@ -137,7 +170,7 @@ pub fn get_most_recent_message(db: &SqliteConnection, number_q: &Option<String>,
     }
 
     match groupid_q {
-        Some(gid) => { println!("{}", gid); query = query.filter(groupid.eq(gid)); },
+        Some(gid) => { query = query.filter(groupid.eq(gid)); },
         None => { query = query.filter(groupid.is_null()); }
     }
 

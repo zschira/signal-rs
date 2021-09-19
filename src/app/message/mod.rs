@@ -1,4 +1,5 @@
 mod imp;
+mod ui;
 
 use glib::Object;
 use gtk::glib;

@@ -1,20 +1,16 @@
 use gtk::prelude::*;
-use gtk::{Align, Button, Box as Box_, Entry, HeaderBar, Justification, 
-          Orientation, Label, ListView, PolicyType, SingleSelection, ScrolledWindow,
+use gtk::{Align, Button, Box as Box_, HeaderBar, EmojiChooser,
+          Orientation, Label, ListView, PolicyType, NoSelection, ScrolledWindow,
           SignalListItemFactory};
-use gtk::glib::{self, clone, MainContext};
+use gtk::glib::{self, clone};
 use gtk::gio;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, Mutex};
-use chrono;
 use diesel::sqlite::SqliteConnection;
 
-use signald::types::{ProfileV1, JsonGroupV2InfoV1,
-                     SendRequestV1, SignaldTypes};
+use signald::types::{ProfileV1, JsonGroupV2InfoV1};
 
 use crate::app::App;
-use crate::models::NewMessage;
 use crate::database;
 use crate::app::message::MessageObject;
 
@@ -34,36 +30,49 @@ pub struct Conversation {
 }
 
 impl Conversation {
-    pub fn new_individual(profile: ProfileV1) -> Self {
+    pub fn new_individual(profile: ProfileV1) -> Option<Self> {
         // Ask for profile from signal if known profile is incomplete
-        let name = match profile.name.as_ref() {
-            Some(name) => name.clone(),
-            None => profile.profile_name.as_ref().unwrap().clone()
+        let name = match profile.name.as_ref().unwrap().is_empty() {
+            false => profile.name.as_ref().unwrap().clone(),
+            true => {
+                profile.profile_name.as_ref().map(|name| {
+                    name.clone()
+                }).unwrap_or_default()
+            }
         };
         let number = profile.address.as_ref().unwrap().number.as_ref().unwrap().clone();
 
-        Conversation {
-            conversation_type: ConversationType::Individual(profile),
-            name,
-            number: Some(number),
-            groupid: None,
-            model: RefCell::new(None),
-            typing: RefCell::new(false),
-            last_message_time: RefCell::new(i64::MIN)
+        if name.is_empty() {
+            None
+        } else {
+            Some(Conversation {
+                conversation_type: ConversationType::Individual(profile),
+                name,
+                number: Some(number),
+                groupid: None,
+                model: RefCell::new(None),
+                typing: RefCell::new(false),
+                last_message_time: RefCell::new(i64::MIN)
+            })
         }
     }
 
-    pub fn new_group(group: JsonGroupV2InfoV1) -> Self {
+    pub fn new_group(group: JsonGroupV2InfoV1) -> Option<Self> {
         let name = group.title.as_ref().unwrap().clone();
         let groupid = group.id.as_ref().unwrap().clone();
-        Conversation {
-            conversation_type: ConversationType::Group(group),
-            name,
-            number: None,
-            groupid: Some(groupid),
-            model: RefCell::new(None),
-            typing: RefCell::new(false),
-            last_message_time: RefCell::new(i64::MIN)
+
+        if name.is_empty() {
+            None
+        } else {
+            Some(Conversation {
+                conversation_type: ConversationType::Group(group),
+                name,
+                number: None,
+                groupid: Some(groupid),
+                model: RefCell::new(None),
+                typing: RefCell::new(false),
+                last_message_time: RefCell::new(i64::MIN)
+            })
         }
     }
 
@@ -74,7 +83,6 @@ impl Conversation {
             &self.groupid
         );
         if let Some(msg) = msg {
-        println!("{}: {}", msg.timestamp, msg.body);
             self.last_message_time.replace(msg.timestamp);
         }
     }
@@ -137,45 +145,7 @@ impl App {
     pub fn conversation_ui(self: Rc<App>, conversation: Rc<Conversation>) {
         let vbox = Box_::new(Orientation::Vertical, 5);
 
-        let msg_box = Box_::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(2)
-            .halign(gtk::Align::Start)
-            .build();
-
-        let msg_entry = Entry::builder()
-            .halign(gtk::Align::Start)
-            .hexpand_set(true)
-            .build();
-
-        let send_button = Button::builder()
-            .label("Send")
-            .halign(gtk::Align::End)
-            .build();
-
-        let app = self.clone();
-        send_button.connect_clicked(clone!(@weak msg_entry, @strong conversation, @strong app =>
-            move |_| {
-                let main_context = MainContext::default();
-                let msg_body = msg_entry.text().to_string();
-                msg_entry.delete_text(0, -1);
-
-                let msg = construct_message(&app.account.borrow(), conversation.clone(), msg_body);
-                store_message(app.db.clone(), &msg, conversation.clone());
-
-                main_context.spawn_local(clone!(@weak msg_entry, @strong app =>
-                    async move {
-                        app.dispatch(
-                            "send",
-                            SignaldTypes::SendRequestV1(msg)
-                        ).await;
-                    }
-                ));
-            }
-        ));
-
-        msg_box.append(&msg_entry);
-        msg_box.append(&send_button);
+        let msg_box = self.clone().message_input_ui(conversation.clone());
 
         let header = HeaderBar::builder()
             .title_widget(&conversation.get_header_widget(self.clone()))
@@ -184,13 +154,13 @@ impl App {
             .build();
 
         vbox.append(&header);
-        vbox.append(&self.get_messages(conversation.clone()));
+        vbox.append(&self.clone().get_messages(conversation.clone()));
         vbox.append(&msg_box);
 
-        app.update_ui(&vbox, "conversation");
+        self.clone().update_ui(&vbox, "conversation");
 
         // Indicate that current coversation is active
-        app.active_conversation.replace(Some(conversation));
+        self.active_conversation.replace(Some(conversation));
     }
 
     fn get_messages(self: Rc<App>, conversation: Rc<Conversation>) -> ScrolledWindow {
@@ -218,6 +188,8 @@ impl App {
             );
         });
 
+        //let reaction = EmojiChooser::new();
+
         factory.connect_bind(clone!(@strong self as app => move |_, list_item| {
             let msg = list_item
                 .item()
@@ -232,10 +204,10 @@ impl App {
                 .downcast::<Box_>()
                 .expect("The child has to be a Box");
 
-            message_ui(msg, app.db.clone(), msg_box);
+            app.clone().message_ui(msg, msg_box/*, &reaction*/);
         }));
 
-        let selection_model = SingleSelection::new(Some(&model));
+        let selection_model = NoSelection::new(Some(&model));
         let list_view = ListView::new(Some(&selection_model), Some(&factory));
 
         let window = ScrolledWindow::builder()
@@ -265,112 +237,5 @@ impl App {
 
         window
     }
-}
 
-fn message_ui(msg: MessageObject, db: Arc<Mutex<SqliteConnection>>, msg_box: Box_) {
-    let number = msg
-        .property("number")
-        .expect("The property needs to exist and be readable.")
-        .get::<Option<String>>()
-        .expect("The property needs to be of type String");
-
-    let from_me = msg
-        .property("from-me")
-        .expect("The property needs to exist and be readable.")
-        .get::<bool>()
-        .expect("The property needs to be of type bool");
-
-    let timestamp = msg
-        .property("timestamp")
-        .expect("The property needs to exist and be readable.")
-        .get::<i64>()
-        .expect("The property needs to be of type bool");
-
-    let groupid = msg
-        .property("groupid")
-        .expect("The property needs to exist and be readable.")
-        .get::<Option<String>>()
-        .expect("The property needs to be of type bool");
-
-    let msg = database::get_message(
-        &db.lock().unwrap(),
-        timestamp,
-        number,
-        from_me,
-        groupid
-    );
-
-    if from_me {
-        msg_box.set_halign(Align::End);
-        msg_box.set_css_classes(&["messageSent"]);
-        msg_box.set_margin_start(200);
-    } else {
-        msg_box.set_halign(Align::Start);
-        msg_box.set_css_classes(&["messageReceived"]);
-        msg_box.set_margin_end(200);
-    }
-
-    let label = Label::builder()
-        .label(msg.body.as_str())
-        .wrap(true)
-        .css_classes(vec!["messageText".to_owned()])
-        .justify(Justification::Left)
-        .halign(Align::Start)
-        .margin_bottom(5)
-        .margin_top(5)
-        .margin_start(5)
-        .margin_end(5)
-        .build();
-
-    msg_box.append(&label);
-}
-
-fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1, conversation: Rc<Conversation>) {
-    let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
-    let msg = NewMessage {
-        timestamp: msg.timestamp.unwrap(),
-        number: msg.recipient_address.as_ref().map(|address| {
-            address.number.as_ref().unwrap().clone()
-        }),
-        from_me: true,
-        is_read: false,
-        attachments: database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref()),
-        body: msg.message_body.as_ref().unwrap().clone(),
-        groupid: msg.recipient_group_id.as_ref().map(|id| id.clone()),
-        quote_timestamp: msg.quote.as_ref().map(|quote| quote.id.unwrap()),
-        quote_author: msg.quote.as_ref().map(|quote| {
-            quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
-        }),
-        mentions,
-        mentions_start,
-        reaction_emojis: None,
-        reaction_authors: None
-    };
-
-    database::store_message(&db.lock().unwrap(), &msg);
-
-    conversation.model
-        .borrow_mut()
-        .as_ref()
-        .unwrap()
-        .append(&MessageObject::new_sent(&msg));
-}
-
-fn construct_message(username: &String, conversation: Rc<Conversation>, body: String) -> SendRequestV1 {
-    SendRequestV1 {
-        username: Some(username.clone()),
-        recipient_address: match &conversation.conversation_type {
-            ConversationType::Individual(conv) => conv.address.clone(),
-            ConversationType::Group(_) => None
-        },
-        recipient_group_id: match &conversation.conversation_type {
-            ConversationType::Group(group) => group.id.clone(),
-            ConversationType::Individual(_) => None
-        },
-        message_body: Some(body),
-        attachments: None,
-        quote: None,
-        timestamp: Some(chrono::offset::Local::now().timestamp_millis()),
-        mentions: None
-    }
 }
