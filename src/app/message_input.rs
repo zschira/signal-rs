@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use gtk::{Entry, Box as Box_, Button, Orientation};
+use gtk::{Entry, Box as Box_, Button, EventControllerFocus, Orientation};
 use gtk::glib::{self, clone, MainContext};
 
 use std::rc::Rc;
@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use chrono;
 use diesel::sqlite::SqliteConnection;
 
-use signald::types::{SendRequestV1, SignaldTypes};
+use signald::types::{TypingRequestV1, SendRequestV1, SignaldTypes};
 
 use crate::models::NewMessage;
 use crate::app::conversation::{Conversation, ConversationType};
@@ -25,6 +25,33 @@ impl App {
             .hexpand(true)
             .show_emoji_icon(true)
             .build();
+
+        let focus_controller = EventControllerFocus::new();
+        focus_controller.connect_enter(clone!(@strong self as app, @strong conversation => move |_| {
+            let typing = construct_typing(&app.account.borrow(), conversation.clone(), true);
+            MainContext::default().spawn_local(clone!(@strong app => async move {
+                app.clone().dispatch(
+                    "typing",
+                    SignaldTypes::TypingRequestV1(
+                        typing
+                    )
+                ).await;
+            }));
+        }));
+
+        focus_controller.connect_leave(clone!(@strong self as app, @strong conversation => move |_| {
+            let typing = construct_typing(&app.account.borrow(), conversation.clone(), false);
+            MainContext::default().spawn_local(clone!(@strong app => async move {
+                app.clone().dispatch(
+                    "typing",
+                    SignaldTypes::TypingRequestV1(
+                        typing
+                    )
+                ).await;
+            }));
+        }));
+
+        msg_entry.add_controller(&focus_controller);
 
         let send_button = Button::builder()
             .icon_name("mail-send")
@@ -54,6 +81,22 @@ impl App {
         hbox.append(&msg_entry);
         hbox.append(&send_button);
         hbox
+    }
+}
+
+fn construct_typing(username: &String, conversation: Rc<Conversation>, typing: bool) -> TypingRequestV1 {
+    TypingRequestV1 {
+        account: Some(username.clone()),
+        address: match &conversation.conversation_type {
+            ConversationType::Individual(conv) => conv.address.clone(),
+            ConversationType::Group(_) => None
+        },
+        group: match &conversation.conversation_type {
+            ConversationType::Group(group) => group.id.clone(),
+            ConversationType::Individual(_) => None
+        },
+        typing: Some(typing),
+        when: Some(chrono::offset::Local::now().timestamp_millis())
     }
 }
 
