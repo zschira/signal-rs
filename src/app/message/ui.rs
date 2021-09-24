@@ -11,9 +11,10 @@ use std::rc::Rc;
 
 use crate::database;
 use crate::models::Message;
+use crate::app::message::url_detect::find_url;
 
 impl App {
-    pub fn message_ui(self: Rc<App>, msg: MessageObject, msg_box: Box_/*, reaction: &EmojiChooser*/) {
+    pub fn message_ui(self: Rc<App>, msg: MessageObject, msg_box: Box_) {
         let number = msg
             .property("number")
             .expect("The property needs to exist and be readable.")
@@ -56,8 +57,13 @@ impl App {
             msg_box.set_margin_end(200);
         }
 
+        if let Some(attachments) = &msg.attachments {
+            msg_box.append(&self.clone().new_media_viewer(attachments));
+        }
+
+        let text = find_url(&msg.body);
+
         let label = Label::builder()
-            .label(msg.body.as_str())
             .wrap(true)
             .css_classes(vec!["messageText".to_owned()])
             .justify(Justification::Left)
@@ -67,6 +73,8 @@ impl App {
             .margin_start(5)
             .margin_end(5)
             .build();
+
+        label.set_markup(text.as_str());
 
         msg_box.append(&label);
 

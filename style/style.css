@@ -25,10 +25,12 @@ box.messageReceived {
     background-color: darkslategrey;
     margin: 15;
     padding: 5;
+    border-radius: 10px;
 }
 
 box.messageSent {
     background-color: purple;
     margin: 15;
     padding: 5;
+    border-radius: 10px;
 }

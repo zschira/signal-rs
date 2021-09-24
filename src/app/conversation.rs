@@ -26,7 +26,7 @@ pub struct Conversation {
     groupid: Option<String>,
     pub model: RefCell<Option<gio::ListStore>>,
     pub typing: RefCell<bool>,
-    pub last_message_time: RefCell<i64>
+    pub last_message_time: RefCell<i64>,
 }
 
 impl Conversation {
@@ -204,7 +204,7 @@ impl App {
                 .downcast::<Box_>()
                 .expect("The child has to be a Box");
 
-            app.clone().message_ui(msg, msg_box/*, &reaction*/);
+            app.clone().message_ui(msg, msg_box);
         }));
 
         let selection_model = NoSelection::new(Some(&model));

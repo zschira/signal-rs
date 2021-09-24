@@ -1,5 +1,6 @@
 mod imp;
 mod ui;
+mod url_detect;
 
 use glib::Object;
 use gtk::glib;

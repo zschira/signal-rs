@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use signald::types::{JsonAttachmentV0, JsonMentionV1};
 
-use crate::models::{NewAttachment, NewMessage, Message};
+use crate::models::{Attachment, NewAttachment, NewMessage, Message};
 use crate::schema::{attachments, messages};
 use crate::app::conversation::ConversationType;
 
@@ -58,6 +58,13 @@ fn store_single_attachment(db: &SqliteConnection, attachment: &JsonAttachmentV0)
         .values(&attachment)
         .execute(db)
         .expect("Failed to insert attachment into db");
+}
+
+pub fn get_attachment(db: &SqliteConnection, id_q: &str) -> Option<Attachment> {
+    use crate::schema::attachments::dsl::*;
+    attachments.filter(id.eq(id_q.to_owned()))
+        .get_result(db)
+        .ok()
 }
 
 pub fn convert_mentions(mentions: &Option<Vec<JsonMentionV1>>) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
@@ -161,7 +168,7 @@ fn construct_message_query<'a>(timestamp_q: i64, number_q: Option<String>, from_
 pub fn get_most_recent_message(db: &SqliteConnection, number_q: &Option<String>, groupid_q: &Option<String>) -> Option<Message> {
     use crate::schema::messages::dsl::*;
     let mut query = messages
-        //.order_by(timestamp.desc())
+        .order_by(timestamp.desc())
         .into_boxed();
 
     match number_q {

@@ -22,6 +22,7 @@ pub mod conversation;
 pub mod message;
 pub mod notifications;
 pub mod message_input;
+mod media_viewer;
 
 use notifications::Notification;
 use conversation::ConversationType;
@@ -158,18 +159,22 @@ impl App {
         if let Some(conv) = self.active_conversation.borrow().as_ref() {
             let notify_ui = match &conv.as_ref().conversation_type {
                 ConversationType::Individual(profile) => {
-                    let number = profile.address
-                        .as_ref()
-                        .unwrap()
-                        .number
-                        .as_ref()
-                        .unwrap();
+                    if msg.groupid.is_some() {
+                        false
+                    } else {
+                        let number = profile.address
+                            .as_ref()
+                            .unwrap()
+                            .number
+                            .as_ref()
+                            .unwrap();
 
-                    let msg_number = msg.number.as_ref()
-                        .map(|msg| msg.as_str())
-                        .unwrap_or_default();
+                        let msg_number = msg.number.as_ref()
+                            .map(|msg| msg.as_str())
+                            .unwrap_or_default();
 
-                    number.as_str() == msg_number
+                        number.as_str() == msg_number
+                    }
                 },
                 ConversationType::Group(group) => {
                     let groupid = group.id.as_ref().unwrap();
