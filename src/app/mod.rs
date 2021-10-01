@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use signald::types::{SignaldTypes, ListAccountsRequestV1, ListContactsRequestV1,
                      ListGroupsRequestV1, ProfileV1, RequestSyncRequestV1, 
                      SubscribeRequestV1};
@@ -29,6 +30,8 @@ use notifications::Notification;
 use conversation::ConversationType;
 use message::MessageObject;
 
+type ContactMap = HashMap<String, ProfileV1>;
+
 pub struct App {
     account: RefCell<String>,
     window: ApplicationWindow,
@@ -37,7 +40,7 @@ pub struct App {
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
     active_conversation: RefCell<Option<Rc<conversation::Conversation>>>,
     curr_view: RefCell<&'static str>,
-    contacts: RefCell<Vec<ProfileV1>>,
+    contacts: RefCell<ContactMap>,
     db: Arc<Mutex<SqliteConnection>>
 }
 
@@ -60,7 +63,7 @@ impl App {
             conversations: RefCell::new(Vec::new()),
             active_conversation: RefCell::new(None),
             curr_view: RefCell::new("none"),
-            contacts: RefCell::new(Vec::new()),
+            contacts: RefCell::new(HashMap::new()),
             db
         });
 
@@ -259,27 +262,25 @@ impl App {
         conversations
     }
 
-    pub fn get_name(self: Rc<App>, number: &str) -> String {
-        for contact in (*self.contacts.borrow()).iter() {
-            let cur_number = contact.address
+    pub fn get_name(self: Rc<App>, number: &str) -> Option<String> {
+        (*self.contacts.borrow()).get(number).as_ref().map(|profile| {
+            profile.name.as_ref().unwrap().clone()
+        })
+    }
+}
+
+fn get_profiles(contacts: SignaldTypes, profiles: &mut ContactMap) -> Vec<Rc<conversation::Conversation>> {
+    if let SignaldTypes::ProfileListV1(profile_list) = contacts {
+        profile_list.profiles.unwrap().drain(..).filter_map(|profile| {
+            let number = profile.address
                 .as_ref()
                 .unwrap()
                 .number
                 .as_ref()
-                .unwrap();
-            if cur_number.as_str() == number {
-                return contact.name.as_ref().unwrap().clone()
-            }
-        }
+                .unwrap()
+                .clone();
 
-        "".to_owned()
-    }
-}
-
-fn get_profiles(contacts: SignaldTypes, profiles: &mut Vec<ProfileV1>) -> Vec<Rc<conversation::Conversation>> {
-    if let SignaldTypes::ProfileListV1(profile_list) = contacts {
-        profile_list.profiles.unwrap().drain(..).filter_map(|profile| {
-            profiles.push(profile.clone());
+            profiles.insert(number, profile.clone());
             conversation::Conversation::new_individual(profile).map(|conv| {
                 Rc::new(conv)
             })

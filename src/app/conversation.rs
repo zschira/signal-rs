@@ -1,8 +1,7 @@
 use gtk::prelude::*;
-use gtk::{Align, Button, Box as Box_, HeaderBar, EmojiChooser,
-          Orientation, Label, ListView, PolicyType, NoSelection, ScrolledWindow,
-          SignalListItemFactory};
-use gtk::glib::{self, clone};
+use gtk::{Align, Button, Box as Box_, HeaderBar, Orientation, Label, ListView, 
+          PolicyType, NoSelection, ScrolledWindow, SignalListItemFactory};
+use gtk::glib::clone;
 use gtk::gio;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};

@@ -64,6 +64,7 @@ impl App {
                     .build();
                 name.set_markup(&format_name(
                     &self.clone().get_name(&msg.number.as_ref().unwrap())
+                        .unwrap_or_default()
                 ));
                 msg_box.append(&name);
             }
@@ -73,8 +74,7 @@ impl App {
             msg_box.append(&self.clone().new_media_viewer(attachments));
         }
 
-        let text = glib::markup_escape_text(&msg.body);
-        let text = find_url(text.as_str());
+        let text = find_url(&msg.body);
 
         let label = Label::builder()
             .wrap(true)
