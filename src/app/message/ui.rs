@@ -55,13 +55,26 @@ impl App {
             msg_box.set_halign(Align::Start);
             msg_box.set_css_classes(&["messageReceived"]);
             msg_box.set_margin_end(200);
+
+            if msg.groupid.is_some() {
+                let name = Label::builder()
+                    .halign(Align::Start)
+                    .justify(Justification::Left)
+                    .margin_top(3)
+                    .build();
+                name.set_markup(&format_name(
+                    &self.clone().get_name(&msg.number.as_ref().unwrap())
+                ));
+                msg_box.append(&name);
+            }
         }
 
         if let Some(attachments) = &msg.attachments {
             msg_box.append(&self.clone().new_media_viewer(attachments));
         }
 
-        let text = find_url(&msg.body);
+        let text = glib::markup_escape_text(&msg.body);
+        let text = find_url(text.as_str());
 
         let label = Label::builder()
             .wrap(true)
@@ -200,4 +213,9 @@ fn create_react_request(msg: &Message, account: &String, emoji: &str) -> ReactRe
         username: Some(account.clone())
 
     }
+}
+
+fn format_name(name: &str) -> String {
+    let name = glib::markup_escape_text(name);
+    format!("<span foreground=\"red\" size=\"medium\" weight=\"bold\">{}</span>", name)
 }

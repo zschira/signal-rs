@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use signald::types::{SignaldTypes, ListAccountsRequestV1, ListContactsRequestV1,
-                     ListGroupsRequestV1, RequestSyncRequestV1, SubscribeRequestV1};
+                     ListGroupsRequestV1, ProfileV1, RequestSyncRequestV1, 
+                     SubscribeRequestV1};
 use diesel::sqlite::SqliteConnection;
 
 use gtk::prelude::*;
@@ -36,6 +37,7 @@ pub struct App {
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
     active_conversation: RefCell<Option<Rc<conversation::Conversation>>>,
     curr_view: RefCell<&'static str>,
+    contacts: RefCell<Vec<ProfileV1>>,
     db: Arc<Mutex<SqliteConnection>>
 }
 
@@ -58,6 +60,7 @@ impl App {
             conversations: RefCell::new(Vec::new()),
             active_conversation: RefCell::new(None),
             curr_view: RefCell::new("none"),
+            contacts: RefCell::new(Vec::new()),
             db
         });
 
@@ -240,7 +243,7 @@ impl App {
             )
         ).await;
 
-        let mut conversations = get_profiles(contacts);
+        let mut conversations = get_profiles(contacts, &mut *self.contacts.borrow_mut());
 
         let groups = self.dispatch(
             "list_groups",
@@ -251,20 +254,43 @@ impl App {
             )
         ).await;
 
-        conversations.append(&mut get_profiles(groups));
+        conversations.append(&mut get_groups(groups));
 
         conversations
     }
+
+    pub fn get_name(self: Rc<App>, number: &str) -> String {
+        for contact in (*self.contacts.borrow()).iter() {
+            let cur_number = contact.address
+                .as_ref()
+                .unwrap()
+                .number
+                .as_ref()
+                .unwrap();
+            if cur_number.as_str() == number {
+                return contact.name.as_ref().unwrap().clone()
+            }
+        }
+
+        "".to_owned()
+    }
 }
 
-fn get_profiles(contacts: SignaldTypes) -> Vec<Rc<conversation::Conversation>> {
-    if let SignaldTypes::ProfileListV1(profiles) = contacts {
-        profiles.profiles.unwrap().drain(..).filter_map(|profile| {
+fn get_profiles(contacts: SignaldTypes, profiles: &mut Vec<ProfileV1>) -> Vec<Rc<conversation::Conversation>> {
+    if let SignaldTypes::ProfileListV1(profile_list) = contacts {
+        profile_list.profiles.unwrap().drain(..).filter_map(|profile| {
+            profiles.push(profile.clone());
             conversation::Conversation::new_individual(profile).map(|conv| {
                 Rc::new(conv)
             })
         }).collect()
-    } else if let SignaldTypes::GroupListV1(groups) = contacts {
+    } else {
+        panic!("Wrong type");
+    }
+}
+
+fn get_groups(groups: SignaldTypes) -> Vec<Rc<conversation::Conversation>> {
+    if let SignaldTypes::GroupListV1(groups) = groups {
         groups.groups.unwrap().drain(..).filter_map(|group| {
             conversation::Conversation::new_group(group).map(|conv| {
                 Rc::new(conv)

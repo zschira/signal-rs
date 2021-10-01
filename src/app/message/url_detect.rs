@@ -1,14 +1,14 @@
 use regex::Regex;
 use lazy_static::lazy_static;
 
-pub fn find_url<'r, 't>(text: &String) -> String {
+pub fn find_url<'r, 't>(text: &str) -> String {
     lazy_static! {
         static ref URL_RE: Regex = Regex::new(r"(?im)(?:(?:https?|ftp|file)://|www\.|ftp\.)(?:\([-A-Z0-9+&@#\\/%=~_|\$?!:,.]*\)|[-A-Z0-9+&@#/%=~_|\$?!:,.])*(?:\([-A-Z0-9+&@#/%=~_|\$?!:,.]*\)|[A-Z0-9+&@#/%=~_|\$])").unwrap();
     }
 
-    let matches = URL_RE.find_iter(&text);
+    let matches = URL_RE.find_iter(text);
     
-    matches.fold(text.clone(), |mut text, url_match| {
+    matches.fold(text.to_owned(), |mut text, url_match| {
         let link = &text[url_match.start()..url_match.end()];
         let link_no_amp = link.replace("&", "&amp;");
         let link = format!("<a href=\"{}\">{}</a>", link_no_amp.as_str(), link_no_amp.as_str());

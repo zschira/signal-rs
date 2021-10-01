@@ -58,8 +58,10 @@ pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<Signald
 
 async fn message_handler(db: Arc<Mutex<SqliteConnection>>, msg: IncomingMessageV1, sender: Sender<Notification>) {
     if msg.data_message.is_some() {
-        handle_data_msg(db, msg, sender).await;
-    } else if msg.sync_message.is_some() {
+        handle_data_msg(db.clone(), msg.clone(), sender).await;
+    } 
+    if msg.sync_message.is_some() {
+        println!("TYPE: {}", msg.type_.unwrap());
         handle_sync_message(db, msg.sync_message.unwrap());
     }
 }
@@ -119,6 +121,7 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
     }
 
     if let Some(sent) = msg.sent {
+        println!("THERE");
         let msg_packet = sent.message.unwrap();
         let destination = sent.destination.unwrap();
         let (mentions, mentions_start) = database::convert_mentions(&msg_packet.mentions);
