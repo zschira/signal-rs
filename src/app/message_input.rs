@@ -14,6 +14,7 @@ use crate::app::conversation::{Conversation, ConversationType};
 use crate::app::App;
 use crate::database;
 use crate::app::MessageObject;
+use crate::signal_type_utils::*;
 
 impl App {
     pub fn message_input_ui(self: Rc<App>, conversation: Rc<Conversation>) -> Box_ {
@@ -124,16 +125,16 @@ fn store_message(db: Arc<Mutex<SqliteConnection>>, msg: &SendRequestV1, conversa
     let msg = NewMessage {
         timestamp: msg.timestamp.unwrap(),
         number: msg.recipient_address.as_ref().map(|address| {
-            address.number.as_ref().unwrap().clone()
+            address.number.unwrap_clone()
         }),
         from_me: true,
         is_read: false,
         attachments: database::store_attachments(&db.lock().unwrap(), msg.attachments.as_ref()),
-        body: msg.message_body.as_ref().unwrap().clone(),
+        body: msg.message_body.unwrap_clone(),
         groupid: msg.recipient_group_id.as_ref().map(|id| id.clone()),
         quote_timestamp: msg.quote.as_ref().map(|quote| quote.id.unwrap()),
         quote_author: msg.quote.as_ref().map(|quote| {
-            quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
+            quote.author.get_number()
         }),
         mentions,
         mentions_start,

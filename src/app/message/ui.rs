@@ -1,10 +1,10 @@
 use super::MessageObject;
 use crate::app::App;
 use gtk::prelude::*;
-use gtk::{Align, Box as Box_, EmojiChooser, GestureClick, Justification, Label, Popover};
+use gtk::{Align, Box as Box_, EmojiChooser, GestureClick, GestureLongPress, Justification, Label, Popover};
 use gtk::glib::{self, clone, MainContext};
 
-use signald::types::{JsonAddressV1, JsonReactionV1, MarkReadRequestV1,
+use signald::types::{JsonAddressV1, JsonReactionV1,
                      ReactRequestV1, SignaldTypes};
 
 use std::rc::Rc;
@@ -91,18 +91,27 @@ impl App {
 
         msg_box.append(&label);
 
-        self.clone().mark_read(&msg);
-
         let right_click = GestureClick::builder()
             .button(3)
             .build();
 
+        let long_touch = GestureLongPress::builder()
+            .touch_only(true)
+            .build();
+
         msg_box.add_controller(&right_click);
+        msg_box.add_controller(&long_touch);
 
         let reaction = self.clone().get_reaction_menu(&msg_box, msg);
 
         right_click.connect_pressed(clone!(@weak msg_box, @weak reaction => 
             move|_,_,_,_| {
+                reaction.popup();
+            }
+        ));
+
+        long_touch.connect_pressed(clone!(@weak msg_box, @weak reaction => 
+            move|_,_,_| {
                 reaction.popup();
             }
         ));
@@ -153,38 +162,6 @@ impl App {
             ).await;
         }));
     }
-
-    fn mark_read(self: Rc<App>, msg: &Message) {
-        if !msg.is_read && !msg.from_me {
-            let timestamp = msg.timestamp;
-            let number = msg.number.as_ref().unwrap().clone();
-            MainContext::default().spawn_local(clone!(@strong self as app => async move {
-                app.clone().dispatch(
-                    "mark_read",
-                    SignaldTypes::MarkReadRequestV1(
-                        MarkReadRequestV1 {
-                            account: Some(app.account.borrow().clone()),
-                            timestamps: Some(vec![timestamp]),
-                            to: Some(JsonAddressV1 {
-                                number: Some(number),
-                                relay: None,
-                                uuid: None
-                            }),
-                            when: Some(
-                                chrono::offset::Local::now().timestamp_millis()
-                            ),
-                        }
-                    )
-                ).await;
-            }));
-
-            database::read_message(
-                &self.db.lock().unwrap(), 
-                msg.timestamp,
-                msg.number.as_ref().unwrap().clone()
-            );
-        }
-    }
 }
 
 fn create_react_request(msg: &Message, account: &String, emoji: &str) -> ReactRequestV1 {
@@ -216,6 +193,6 @@ fn create_react_request(msg: &Message, account: &String, emoji: &str) -> ReactRe
 }
 
 fn format_name(name: &str) -> String {
-    let name = glib::markup_escape_text(name);
+    let name = glib::markup_escape_text(&name.replace('\0', " "));
     format!("<span foreground=\"red\" size=\"medium\" weight=\"bold\">{}</span>", name)
 }

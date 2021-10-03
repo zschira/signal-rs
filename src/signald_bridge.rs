@@ -10,6 +10,7 @@ use gtk::glib::clone;
 use crate::database;
 use crate::models::NewMessage;
 use crate::app::notifications::Notification;
+use crate::signal_type_utils::*;
 
 pub struct SignaldInteraction {
     pub key: &'static str,
@@ -85,13 +86,13 @@ async fn handle_data_msg(db: Arc<Mutex<SqliteConnection>>, envelope: IncomingMes
 
     let body = msg.body.unwrap();
     let groupid = msg.group_v_2.as_ref().map(|group| {
-        group.id.as_ref().unwrap().clone()
+        group.id.unwrap_clone()
     });
     let quote_timestamp = msg.quote.as_ref().map(|quote| {
         quote.id.unwrap()
     });
     let quote_author = msg.quote.as_ref().map(|quote| {
-        quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
+        quote.author.get_number()
     });
     let (mentions, mentions_start) = database::convert_mentions(&msg.mentions);
 
@@ -121,7 +122,6 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
     }
 
     if let Some(sent) = msg.sent {
-        println!("THERE");
         let msg_packet = sent.message.unwrap();
         let destination = sent.destination.unwrap();
         let (mentions, mentions_start) = database::convert_mentions(&msg_packet.mentions);
@@ -133,13 +133,13 @@ fn handle_sync_message(db: Arc<Mutex<SqliteConnection>>, msg: JsonSyncMessageV1)
             body: msg_packet.body.unwrap(),
             attachments: database::store_attachments(&db.lock().unwrap(), msg_packet.attachments.as_ref()),
             groupid: msg_packet.group_v_2.as_ref().map(|group| {
-                group.id.as_ref().unwrap().clone()
+                group.id.unwrap_clone()
             }),
             quote_timestamp: msg_packet.quote.as_ref().map(|quote| {
                 quote.id.unwrap()
             }),
             quote_author: msg_packet.quote.as_ref().map(|quote| {
-                quote.author.as_ref().unwrap().number.as_ref().unwrap().clone()
+                quote.author.get_number()
             }),
             mentions,
             mentions_start,

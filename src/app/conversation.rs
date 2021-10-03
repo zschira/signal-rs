@@ -1,17 +1,21 @@
 use gtk::prelude::*;
 use gtk::{Align, Button, Box as Box_, HeaderBar, Orientation, Label, ListView, 
           PolicyType, NoSelection, ScrolledWindow, SignalListItemFactory};
-use gtk::glib::clone;
 use gtk::gio;
+use gtk::glib::{self, clone, MainContext};
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 use diesel::sqlite::SqliteConnection;
+use std::collections::HashMap;
 
-use signald::types::{ProfileV1, JsonGroupV2InfoV1};
+use signald::types::{ProfileV1, JsonAddressV1, JsonGroupV2InfoV1, MarkReadRequestV1,
+                     SignaldTypes};
 
 use crate::app::App;
 use crate::database;
 use crate::app::message::MessageObject;
+use crate::signal_type_utils::*;
+use crate::models::NewMessage;
 
 pub enum ConversationType {
     Individual(ProfileV1),
@@ -26,20 +30,17 @@ pub struct Conversation {
     pub model: RefCell<Option<gio::ListStore>>,
     pub typing: RefCell<bool>,
     pub last_message_time: RefCell<i64>,
+    pub is_active: RefCell<bool>,
+    pub new_msgs: RefCell<usize>,
+    pub unread: RefCell<HashMap<String, Vec<i64>>>
 }
 
 impl Conversation {
-    pub fn new_individual(profile: ProfileV1) -> Option<Self> {
+    pub fn new_individual(profile: ProfileV1, db: &SqliteConnection) -> Option<Self> {
         // Ask for profile from signal if known profile is incomplete
-        let name = match profile.name.as_ref().unwrap().is_empty() {
-            false => profile.name.as_ref().unwrap().clone(),
-            true => {
-                profile.profile_name.as_ref().map(|name| {
-                    name.clone()
-                }).unwrap_or_default()
-            }
-        };
-        let number = profile.address.as_ref().unwrap().number.as_ref().unwrap().clone();
+        let name = profile.get_name();
+        let number = profile.address.get_number();
+        let (new_msgs, unread) = database::get_unread(db, Some(&number), None);
 
         if name.is_empty() {
             None
@@ -51,14 +52,18 @@ impl Conversation {
                 groupid: None,
                 model: RefCell::new(None),
                 typing: RefCell::new(false),
-                last_message_time: RefCell::new(i64::MIN)
+                last_message_time: RefCell::new(i64::MIN),
+                is_active: RefCell::new(false),
+                new_msgs: RefCell::new(new_msgs),
+                unread: RefCell::new(unread)
             })
         }
     }
 
-    pub fn new_group(group: JsonGroupV2InfoV1) -> Option<Self> {
-        let name = group.title.as_ref().unwrap().clone();
-        let groupid = group.id.as_ref().unwrap().clone();
+    pub fn new_group(group: JsonGroupV2InfoV1, db: &SqliteConnection) -> Option<Self> {
+        let name = group.title.unwrap_clone();
+        let groupid = group.id.unwrap_clone();
+        let (new_msgs, unread) = database::get_unread(db, None, Some(&groupid));
 
         if name.is_empty() {
             None
@@ -70,7 +75,10 @@ impl Conversation {
                 groupid: Some(groupid),
                 model: RefCell::new(None),
                 typing: RefCell::new(false),
-                last_message_time: RefCell::new(i64::MIN)
+                last_message_time: RefCell::new(i64::MIN),
+                is_active: RefCell::new(false),
+                new_msgs: RefCell::new(new_msgs),
+                unread: RefCell::new(unread)
             })
         }
     }
@@ -97,57 +105,38 @@ impl Conversation {
         }
     }
 
-    fn get_header_widget(&self, app: Rc<App>) -> Box_ {
-        let hbox = Box_::new(Orientation::Horizontal, 3);
-        let back_button = Button::builder()
-            .icon_name("go-previous")
-            .build();
+    pub fn notify_msg(&self, msg: NewMessage) {
+        if let Some(model) = &*self.model.borrow() {
+            model.append(&MessageObject::new_sent(&msg));
+        }
 
-        back_button.connect_clicked(move |_| {
-            app.update_ui(&app.clone().main_view_ui(), "main_view");
-            app.active_conversation.replace(None);
-        });
-
-        let name = Label::builder()
-            .label(self.get_name())
-            .halign(Align::Center)
-            .build();
-
-        let video_button = Button::builder()
-            .halign(Align::End)
-            .icon_name("camera-video")
-            .build();
-
-        let call_button = Button::builder()
-            .halign(Align::End)
-            .icon_name("phone")
-            .build();
-
-        let menu_button = Button::builder()
-            .halign(Align::End)
-            .icon_name("open-menu")
-            .build();
-
-        hbox.append(&back_button);
-        hbox.append(&name);
-        hbox.append(&video_button);
-        hbox.append(&call_button);
-        hbox.append(&menu_button);
-        hbox.set_halign(Align::Start);
-        hbox.set_hexpand(true);
-
-        hbox
+        if !(*self.is_active.borrow()) {
+            self.new_msgs.replace_with(|&mut num_msgs| num_msgs + 1);
+            let unread = &mut *self.unread.borrow_mut();
+            let number = msg.number.unwrap();
+            if let Some(timestamps) = unread.get_mut(&number) {
+                timestamps.push(msg.timestamp);
+            } else {
+                unread.insert(number, vec![msg.timestamp]);
+            }
+        }
     }
 }
 
 impl App {
     pub fn conversation_ui(self: Rc<App>, conversation: Rc<Conversation>) {
+        // Mark messages read
+        MainContext::default().spawn_local(clone!(@strong self as app, @strong conversation => async move {
+            app.read_messages(conversation).await;
+        }));
+
+        conversation.is_active.replace(true);
         let vbox = Box_::new(Orientation::Vertical, 5);
 
         let msg_box = self.clone().message_input_ui(conversation.clone());
 
         let header = HeaderBar::builder()
-            .title_widget(&conversation.get_header_widget(self.clone()))
+            .title_widget(&self.clone().get_header_widget(conversation.clone()))
             .show_title_buttons(true)
             .decoration_layout("icon,menu:close")
             .build();
@@ -157,9 +146,24 @@ impl App {
         vbox.append(&msg_box);
 
         self.clone().update_ui(&vbox, "conversation");
+    }
 
-        // Indicate that current coversation is active
-        self.active_conversation.replace(Some(conversation));
+    async fn read_messages(self: Rc<App>, conversation: Rc<Conversation>) {
+        conversation.new_msgs.replace(0);
+        for (number, timestamps) in (*conversation.unread.borrow_mut()).drain() {
+            database::read_msgs(&self.db.lock().unwrap(), &timestamps, &number);
+            self.clone().dispatch(
+                "mark_read",
+                SignaldTypes::MarkReadRequestV1(
+                    MarkReadRequestV1 {
+                        account: Some(self.account.borrow().clone()),
+                        timestamps: Some(timestamps),
+                        to: JsonAddressV1::from_number(number),
+                        when: Some(chrono::offset::Local::now().timestamp_millis())
+                    }
+                )
+            ).await;
+        }
     }
 
     fn get_messages(self: Rc<App>, conversation: Rc<Conversation>) -> ScrolledWindow {
@@ -186,8 +190,6 @@ impl App {
                 )
             );
         });
-
-        //let reaction = EmojiChooser::new();
 
         factory.connect_bind(clone!(@strong self as app => move |_, list_item| {
             let msg = list_item
@@ -237,4 +239,45 @@ impl App {
         window
     }
 
+    fn get_header_widget(self: Rc<App>, conversation: Rc<Conversation>) -> Box_ {
+        let hbox = Box_::new(Orientation::Horizontal, 3);
+        let back_button = Button::builder()
+            .icon_name("go-previous")
+            .build();
+
+        back_button.connect_clicked(clone!(@strong self as app, @strong conversation => move |_| {
+            conversation.is_active.replace(false);
+            app.update_ui(&app.clone().main_view_ui(), "main_view");
+        }));
+
+        let name = Label::builder()
+            .label(conversation.get_name())
+            .halign(Align::Center)
+            .build();
+
+        let video_button = Button::builder()
+            .halign(Align::End)
+            .icon_name("camera-video")
+            .build();
+
+        let call_button = Button::builder()
+            .halign(Align::End)
+            .icon_name("phone")
+            .build();
+
+        let menu_button = Button::builder()
+            .halign(Align::End)
+            .icon_name("open-menu")
+            .build();
+
+        hbox.append(&back_button);
+        hbox.append(&name);
+        hbox.append(&video_button);
+        hbox.append(&call_button);
+        hbox.append(&menu_button);
+        hbox.set_halign(Align::Start);
+        hbox.set_hexpand(true);
+
+        hbox
+    }
 }

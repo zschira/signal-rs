@@ -16,6 +16,7 @@ use async_std::channel::{bounded, Sender, Receiver};
 use crate::signald_bridge::{listen, SignaldInteraction};
 use crate::database::establish_connection;
 use crate::models::NewMessage;
+use crate::signal_type_utils::*;
 
 pub mod link_device;
 pub mod load_app;
@@ -27,7 +28,6 @@ pub mod message_input;
 mod media_viewer;
 
 use notifications::Notification;
-use conversation::ConversationType;
 use message::MessageObject;
 
 type ContactMap = HashMap<String, ProfileV1>;
@@ -38,7 +38,6 @@ pub struct App {
     signald_sender: Sender<SignaldInteraction>,
     notification_receiver: Receiver<Notification>,
     conversations: RefCell<Vec<Rc<conversation::Conversation>>>,
-    active_conversation: RefCell<Option<Rc<conversation::Conversation>>>,
     curr_view: RefCell<&'static str>,
     contacts: RefCell<ContactMap>,
     db: Arc<Mutex<SqliteConnection>>
@@ -61,7 +60,6 @@ impl App {
             signald_sender: msg_sender,
             notification_receiver, 
             conversations: RefCell::new(Vec::new()),
-            active_conversation: RefCell::new(None),
             curr_view: RefCell::new("none"),
             contacts: RefCell::new(HashMap::new()),
             db
@@ -158,49 +156,13 @@ impl App {
 
     async fn message_notification(self: Rc<App>, msg: NewMessage) {
         self.clone().order_conversations();
+        (*self.conversations.borrow())[0].notify_msg(msg);
+
+        // Redraw main view after adding notification
         if self.curr_view.borrow().eq("main_view") {
             self.clone().update_ui(&self.clone().main_view_ui(), "main_view");
         }
 
-        if let Some(conv) = self.active_conversation.borrow().as_ref() {
-            let notify_ui = match &conv.as_ref().conversation_type {
-                ConversationType::Individual(profile) => {
-                    if msg.groupid.is_some() {
-                        false
-                    } else {
-                        let number = profile.address
-                            .as_ref()
-                            .unwrap()
-                            .number
-                            .as_ref()
-                            .unwrap();
-
-                        let msg_number = msg.number.as_ref()
-                            .map(|msg| msg.as_str())
-                            .unwrap_or_default();
-
-                        number.as_str() == msg_number
-                    }
-                },
-                ConversationType::Group(group) => {
-                    let groupid = group.id.as_ref().unwrap();
-                    let msg_groupid = msg.groupid.as_ref()
-                        .map(|groupid| groupid.as_str())
-                        .unwrap_or_default();
-
-                    groupid.as_str() == msg_groupid
-                }
-            };
-
-            if notify_ui {
-                conv.as_ref()
-                    .model
-                    .borrow_mut()
-                    .as_ref()
-                    .unwrap()
-                    .append(&MessageObject::new_sent(&msg));
-            }
-        }
     }
 
     fn order_conversations(self: Rc<App>) {
@@ -246,9 +208,12 @@ impl App {
             )
         ).await;
 
-        let mut conversations = get_profiles(contacts, &mut *self.contacts.borrow_mut());
+        let mut conversations = self.clone().get_profiles(
+            contacts,
+            &mut *self.contacts.borrow_mut()
+        );
 
-        let groups = self.dispatch(
+        let groups = self.clone().dispatch(
             "list_groups",
             SignaldTypes::ListGroupsRequestV1(
                 ListGroupsRequestV1 {
@@ -257,47 +222,43 @@ impl App {
             )
         ).await;
 
-        conversations.append(&mut get_groups(groups));
+        conversations.append(&mut self.get_groups(groups));
 
         conversations
     }
 
     pub fn get_name(self: Rc<App>, number: &str) -> Option<String> {
         (*self.contacts.borrow()).get(number).as_ref().map(|profile| {
-            profile.name.as_ref().unwrap().clone()
+            profile.get_name()
         })
     }
-}
 
-fn get_profiles(contacts: SignaldTypes, profiles: &mut ContactMap) -> Vec<Rc<conversation::Conversation>> {
-    if let SignaldTypes::ProfileListV1(profile_list) = contacts {
-        profile_list.profiles.unwrap().drain(..).filter_map(|profile| {
-            let number = profile.address
-                .as_ref()
-                .unwrap()
-                .number
-                .as_ref()
-                .unwrap()
-                .clone();
+    fn get_profiles(self: Rc<App>, contacts: SignaldTypes, profiles: &mut ContactMap) -> Vec<Rc<conversation::Conversation>> {
+        if let SignaldTypes::ProfileListV1(profile_list) = contacts {
+            profile_list.profiles.unwrap().drain(..).filter_map(|profile| {
+                let number = profile.address.get_number();
+                profiles.insert(number, profile.clone());
 
-            profiles.insert(number, profile.clone());
-            conversation::Conversation::new_individual(profile).map(|conv| {
-                Rc::new(conv)
-            })
-        }).collect()
-    } else {
-        panic!("Wrong type");
+                let db = self.db.lock().unwrap();
+                conversation::Conversation::new_individual(profile, &db).map(|conv| {
+                    Rc::new(conv)
+                })
+            }).collect()
+        } else {
+            panic!("Wrong type");
+        }
     }
-}
 
-fn get_groups(groups: SignaldTypes) -> Vec<Rc<conversation::Conversation>> {
-    if let SignaldTypes::GroupListV1(groups) = groups {
-        groups.groups.unwrap().drain(..).filter_map(|group| {
-            conversation::Conversation::new_group(group).map(|conv| {
-                Rc::new(conv)
-            })
-        }).collect()
-    } else {
-        panic!("Wrong type");
+    fn get_groups(self: Rc<App>, groups: SignaldTypes) -> Vec<Rc<conversation::Conversation>> {
+        if let SignaldTypes::GroupListV1(groups) = groups {
+            groups.groups.unwrap().drain(..).filter_map(|group| {
+                let db = self.db.lock().unwrap();
+                conversation::Conversation::new_group(group, &db).map(|conv| {
+                    Rc::new(conv)
+                })
+            }).collect()
+        } else {
+            panic!("Wrong type");
+        }
     }
 }

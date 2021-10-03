@@ -54,6 +54,18 @@ impl App {
             msg_box.append(&avatar);
             msg_box.append(&label);
 
+            if *conversation.new_msgs.borrow() > 0 {
+                let msg_notify = Label::builder()
+                    .label(
+                        &format!("+{}", *conversation.new_msgs.borrow())
+                    )
+                    .css_classes(vec!["newMsg".to_owned()])
+                    .margin_start(15)
+                    .build();
+
+                msg_box.append(&msg_notify);
+            }
+
             let conv_button = Button::builder()
                 .child(&msg_box)
                 .build();

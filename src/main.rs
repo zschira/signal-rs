@@ -8,14 +8,13 @@ use gtk::gdk::Display;
 use gtk::{
     Application, CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION
 };
-use gtk::glib::{clone, MainContext};
 
 mod signald_bridge;
-//mod chat;
 mod app;
 mod database;
 mod schema;
 mod models;
+mod signal_type_utils;
 
 use crate::app::App;
 

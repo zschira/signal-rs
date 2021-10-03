@@ -2,6 +2,7 @@ use diesel::prelude::*;
 use diesel::sqlite::{Sqlite, SqliteConnection};
 use dotenv::dotenv;
 use std::env;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use signald::types::{JsonAttachmentV0, JsonMentionV1};
@@ -131,17 +132,19 @@ pub fn mark_read(db: &SqliteConnection, timestamps: Vec<i64>) {
     }
 }
 
-pub fn read_message(db: &SqliteConnection, timestamp_q: i64, number_q: String) {
+pub fn read_msgs(db: &SqliteConnection, timestamps: &Vec<i64>, number_q: &String) {
     use crate::schema::messages::dsl::*;
 
     // Number must be some because this is for received messages
-    let query = messages.filter(timestamp.eq(timestamp_q))
-        .filter(number.eq(number_q));
+    for timestamp_q in timestamps {
+        let query = messages.filter(timestamp.eq(timestamp_q))
+            .filter(number.eq(number_q));
 
-    diesel::update(query)
-        .set(is_read.eq(true))
-        .execute(db)
-        .expect("Couldn't mark message as read");
+        diesel::update(query)
+            .set(is_read.eq(true))
+            .execute(db)
+            .expect("Couldn't mark message as read");
+    }
 }
 
 fn construct_message_query<'a>(timestamp_q: i64, number_q: Option<String>, from_me_q: bool, groupid_q: Option<String>) -> messages::BoxedQuery<'a, Sqlite> {
@@ -183,4 +186,37 @@ pub fn get_most_recent_message(db: &SqliteConnection, number_q: &Option<String>,
 
     query.get_result(db)
         .ok()
+}
+
+pub fn get_unread(db: &SqliteConnection, number_q: Option<&String>, groupid_q: Option<&String>) -> (usize, HashMap<String, Vec<i64>>) {
+    use crate::schema::messages::dsl::*;
+    let mut query = messages
+        .filter(is_read.eq(false))
+        .filter(from_me.eq(false))
+        .into_boxed();
+
+    match number_q {
+        Some(number_q) => { query = query.filter(number.eq(number_q)); },
+        None => { } // Ignore number and just query by groupid
+    }
+
+    match groupid_q {
+        Some(gid) => { query = query.filter(groupid.eq(gid)); },
+        None => { query = query.filter(groupid.is_null()); }
+    }
+
+    query.load::<Message>(db)
+        .expect("Error loading unread messages")
+        .drain(..)
+        .fold((0, HashMap::new()), |tup, msg| {
+            let mut map = tup.1;
+            let new_number = msg.number.unwrap();
+            if let Some(timestamps) = map.get_mut(&new_number) {
+                timestamps.push(msg.timestamp);
+            } else {
+                map.insert(new_number, vec![msg.timestamp]);
+            }
+
+            (tup.0 + 1, map)
+        })
 }
