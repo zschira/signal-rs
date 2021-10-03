@@ -19,17 +19,35 @@ pub struct SignaldInteraction {
 }
 
 pub async fn listen(db: Arc<Mutex<SqliteConnection>>, receiver: Receiver<SignaldInteraction>, sender: Sender<Notification>) {
-    let mut signald = Signald::connect(
-        "run/signald.sock",
-        move |msg| {
-            // Use async std runtime to manage future as that's what's being used
-            // by the socket (also will eventually allow gtk main loop to fully
-            // block while app is not open)
-            async_std::task::spawn(clone!(@strong db, @strong sender => async move {
-                message_handler(db, msg, sender).await;
-            }));
+    let paths = vec!["$XDG_RUNTIME_DIR/signald/signald.sock", "/var/run/signald/signald.sock"];
+
+    let mut counter = 0;
+    let mut signald = loop {
+        let sender = sender.clone();
+        let db = db.clone();
+        let signald = Signald::connect(
+            paths[counter],
+            move |msg| {
+                // Use async std runtime to manage future as that's what's being used
+                // by the socket (also will eventually allow gtk main loop to fully
+                // block while app is not open)
+                async_std::task::spawn(clone!(@strong db, @strong sender => async move {
+                    message_handler(db, msg, sender).await;
+                }));
+            }
+        ).await;
+
+        match signald {
+            Ok(signald) => { break signald; },
+            Err(_) => {
+                if counter == 1 {
+                    panic!("Failed to open socket");
+                }
+            }
         }
-    ).await.expect("Failed to open socket to signald");
+        
+        counter += 1;
+    };
 
     loop {
         let request = receiver.recv().await.expect("Request channel not working");
